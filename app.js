@@ -306,16 +306,26 @@
   }
   function store(key, val) { try { if (val === undefined) { var v = localStorage.getItem(key); return v ? JSON.parse(v) : null; } localStorage.setItem(key, JSON.stringify(val)); } catch (e) { return null; } return null; }
   function readParams() {
-    var out = {};
-    var sp = new URLSearchParams(location.search);
-    sp.forEach(function (v, k) { out[k] = v; });
-    if (out['liff.state']) {
-      var st = out['liff.state'];
-      var q = st.indexOf('?') >= 0 ? st.slice(st.indexOf('?') + 1) : '';
-      new URLSearchParams(q).forEach(function (v, k) { if (!out[k]) out[k] = v; });
-      delete out['liff.state'];
-    }
+    var raw = {}, out = {};
+    new URLSearchParams(location.search).forEach(function (v, k) { raw[k] = v; });
+    var callback = !!(raw.liffClientId || raw.liffRedirectUri); // กลับจากหน้า LINE Login บนคอม
+    Object.keys(raw).forEach(function (k) {
+      if (k === 'liff.state' || k === 'liffClientId' || k === 'liffRedirectUri') return;
+      if (callback && (k === 'code' || k === 'state')) return;
+      out[k] = raw[k];
+    });
+    function merge(u) { u = String(u || ''); var q = u.indexOf('?') >= 0 ? u.slice(u.indexOf('?') + 1) : ''; new URLSearchParams(q).forEach(function (v, k) { if (!out[k]) out[k] = v; }); }
+    merge(raw['liff.state']);      // เปิดครั้งแรกจาก LINE
+    merge(raw.liffRedirectUri);    // หน้าที่ตั้งใจเปิดก่อนไปล็อกอิน
     return out;
+  }
+  /* ล้างพารามิเตอร์ของการล็อกอินออกจากแถบที่อยู่ เพื่อให้กด Bookmark แล้วเปิดซ้ำได้ */
+  function cleanUrl() {
+    try {
+      if (!/[?&](code|liffClientId|liffRedirectUri|liff\.state)=/.test(location.search)) return;
+      var q = new URLSearchParams(); Object.keys(S.params).forEach(function (k) { q.set(k, S.params[k]); });
+      history.replaceState(null, '', location.pathname + (q.toString() ? '?' + q.toString() : ''));
+    } catch (e) { }
   }
   function api(action, data) {
     var token = '';
@@ -859,7 +869,7 @@
     standingConfirm: function () {
       run('กำลังยืนยัน...', api('standingConfirm'), function (r) { toast(r.already ? 'ยืนยันวันที่ ' + r.date + ' ไว้แล้ว' : 'ยืนยันแล้ว ออเดอร์ ' + r.orderId); delete S.params.confirm; pageStanding(); });
     },
-    partnerJoin: function () { run('กำลังผูกบัญชี...', api('partnerJoin', { pid: S.params.pid, code: S.params.code }), function () { return refreshMe().then(function () { go('partner', {}); }); }); },
+    partnerJoin: function () { run('กำลังผูกบัญชี...', api('partnerJoin', { pid: S.params.pid, code: S.params.jc || S.params.code }), function () { return refreshMe().then(function () { go('partner', {}); }); }); },
     tab: function (el) { S.adminTab = el.dataset.p; pageAdmin(); },
     refresh: function () { pageAdmin(true); },
     clearCheck: function () { S.check = null; pageAdmin(); },
@@ -973,6 +983,7 @@
       if (!liff.isLoggedIn()) { liff.login({ redirectUri: location.href }); return null; }
       S.params = readParams();
       S.page = S.params.page || 'home';
+      cleanUrl();
       return Promise.all([api('catalog'), api('me')]);
     }).then(function (res) {
       if (!res) return;
