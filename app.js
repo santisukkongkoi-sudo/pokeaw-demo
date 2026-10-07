@@ -3,7 +3,7 @@
 (function () {
   'use strict';
   var CFG = window.APP_CONFIG || {};
-  var APP_VERSION = '2.0.0';
+  var APP_VERSION = '2.2.0';
 
   /* ===== คำนวณตะกร้า (ใช้ร่วมกันทั้งหลังบ้านและหน้า MINI App — แก้ที่เดียวทั้งสองฝั่ง) ===== */
   function daysBetween(a, b) {
@@ -14,9 +14,53 @@
     for (var i = 0; i < p.tiers.length; i++) { if (q >= p.tiers[i].min) pr = p.tiers[i].price; }
     return pr;
   }
+  function numList(s) { return String(s === undefined || s === null ? '' : s).split(/[,|\s]+/).map(Number).filter(function (n) { return n > 0; }); }
   /**
-   * cart: { lines: {sku: qty}, bundles: {id: qty}, useCoin: bool, mode: 'deliver'|'pickup', slot }
-   * ctx:  { products: [...], bundles: [...], cfg: {...}, member: {couponLeft, couponExpires, sourceKind, inZone, regDate} | null, coinBal, today: 'yyyy-MM-dd' }
+   * แถวกติกาจากแท็บ Offers → แผนส่วนลด (ใช้ทั้งหลังบ้านและหน้าเว็บ)
+   * steps: "150" = ลด 150 บาท · "33%" = ลด 33% · หลายบิลคั่นด้วย , เช่น "50,15%"
+   */
+  function offerPlan(o) {
+    if (!o) return null;
+    var steps = String(o.steps === undefined || o.steps === null ? '' : o.steps).split(/[,|]+/).map(function (x) {
+      x = String(x).trim(); if (!x) return null;
+      var pct = /%$/.test(x), v = Number(x.replace(/[%฿,\s]/g, ''));
+      return v > 0 ? (pct ? { pct: v } : { amt: v }) : null;
+    }).filter(Boolean);
+    function list(v) { return String(v === undefined || v === null ? '' : v).split(/[,|]+/).map(function (x) { return Number(String(x).trim()) || 0; }); }
+    return { id: String(o.id || o.offer_id || ''), steps: steps, caps: list(o.caps), mins: list(o.min_bill !== undefined ? o.min_bill : o.mins), days: Number(o.days) || 30,
+      scope: String(o.scope || 'promo') === 'all' ? 'all' : 'promo', label: String(o.label || '') };
+  }
+  /**
+   * คูปองลูกค้าใหม่แบบบันได แยกตามประเภทลูกค้า (B2C = Consumer / FS = ร้านอาหาร) หรือตามกติกาในแท็บ Offers (offer)
+   * → { pcts: [% บิลที่ 1, 2, ...], amts: [บาท...], caps: [เพดานบาท...], mins: [ขั้นต่ำ...], days, minBill, scope, sources, bills }
+   */
+  function couponPlan(cfg, type, offer) {
+    var op = offer && Array.isArray(offer.steps) ? offer : offerPlan(offer);
+    if (op && op.steps.length) {
+      return { pcts: op.steps.map(function (x) { return x.pct || 0; }), amts: op.steps.map(function (x) { return x.amt || 0; }), caps: op.caps.length ? op.caps : [0], mins: op.mins.length ? op.mins : [0],
+        days: op.days, minBill: op.mins[0] || 0, scope: op.scope, sources: [], bills: op.steps.length, offerId: op.id, label: op.label };
+    }
+    var fs = type !== 'Consumer';
+    var pcts = numList(fs ? cfg.COUPON_FS_LADDER : cfg.COUPON_LADDER);
+    if (!pcts.length) { var n = Math.max(1, Math.floor(Number(cfg.COUPON_BILLS) || 1)); for (var i = 0; i < n; i++) pcts.push(Number(cfg.COUPON_PCT) || 0); }
+    var caps = numList(fs ? cfg.COUPON_FS_CAPS : cfg.COUPON_CAPS);
+    if (!caps.length) caps = [Number(cfg.COUPON_CAP) || 0];
+    var days = fs ? (Number(cfg.COUPON_FS_DAYS) || Number(cfg.COUPON_DAYS) || 60) : (Number(cfg.COUPON_DAYS) || 30);
+    var minRaw = fs ? cfg.COUPON_FS_MIN_BILL : cfg.COUPON_MIN_BILL, minBill = minRaw === '' || minRaw === undefined || minRaw === null ? 0 : Number(minRaw) || 0;
+    var src = String((fs ? cfg.COUPON_FS_SOURCES : cfg.COUPON_SOURCES) || (fs ? 'ref' : 'ref,sign,self')).split(/[,|\s]+/).filter(Boolean);
+    return { pcts: pcts, amts: pcts.map(function () { return 0; }), caps: caps, mins: [minBill], days: days, minBill: minBill, scope: 'promo', sources: src, bills: pcts.length, offerId: '', label: '' };
+  }
+  /* ข้อความสั้นของขั้นคูปอง เช่น "ลด ฿150" / "ลด 33% (สูงสุด ฿60)" */
+  function stepText(plan, i) {
+    var cap = plan.caps[Math.min(i, plan.caps.length - 1)] || 0;
+    return plan.amts[i] ? 'ลด ฿' + plan.amts[i].toLocaleString('en-US') : 'ลด ' + plan.pcts[i] + '%' + (cap ? ' (สูงสุด ฿' + cap.toLocaleString('en-US') + ')' : '');
+  }
+  /* ขั้นของคูปองที่จะใช้กับบิลถัดไป (0 = บิลแรก) จากจำนวนที่เหลือ */
+  function couponStep(plan, couponLeft) { return Math.max(0, Math.min(plan.bills - 1, plan.bills - Math.floor(Number(couponLeft) || 0))); }
+  /**
+   * cart: { lines: {sku: qty}, bundles: {id: qty}, useCoin: bool, mode: 'deliver'|'pickup'|'shop', slot }
+   * cart: evening = true → รอบเย็น (Evening Extension)
+   * ctx:  { products: [...], bundles: [...], cfg: {...}, member: {type, couponLeft, couponExpires, sourceKind, inZone, regDate, offer} | null, coinBal, today: 'yyyy-MM-dd' }
    */
   function calcCart(cart, ctx) {
     var cfg = ctx.cfg, today = ctx.today, m = ctx.member || null;
@@ -37,32 +81,46 @@
       var q = Math.floor(Number(cb[id]) || 0); if (q <= 0) return;
       var b = bmap[id];
       if (!b || !b.active) { errors.push('ไม่พบเซ็ต ' + id); return; }
-      var kg = 0, normal = 0;
+      var kg = 0, normal = 0, out = b.items.filter(function (it) { var p = pmap[it[0]]; return !p || !p.inStock; });
+      if (out.length) { errors.push(b.name + ' หมดวันนี้ (สินค้าในเซ็ตหมด)'); return; }
       b.items.forEach(function (it) { var p = pmap[it[0]]; if (p) { kg += p.kg * it[1]; normal += unitPrice(p, it[1]) * it[1]; } });
       bl.push({ id: id, name: b.name, qty: q, price: b.price, total: b.price * q, kg: kg * q, normal: normal * q });
     });
     var subtotal = 0, eligible = 0, kgSum = 0;
     lines.forEach(function (l) { subtotal += l.total; kgSum += l.kg; if (l.promo) eligible += l.total; });
     bl.forEach(function (l) { subtotal += l.total; kgSum += l.kg; eligible += l.total; });
-    var coupon = 0, couponWhy = '';
+    var coupon = 0, couponWhy = '', couponPct = 0, couponCap = 0, couponAmt = 0, step = 0, plan = couponPlan(cfg, m ? m.type : 'FS', m ? m.offer : null);
     if (m && Number(m.couponLeft) > 0) {
+      step = couponStep(plan, m.couponLeft); couponPct = plan.pcts[step] || 0; couponAmt = plan.amts[step] || 0; couponCap = plan.caps[Math.min(step, plan.caps.length - 1)] || 0;
+      var minB = plan.mins[Math.min(step, plan.mins.length - 1)] || 0, base = plan.scope === 'all' ? subtotal : eligible;
       if (String(m.couponExpires || '') < today) couponWhy = 'คูปองหมดอายุแล้ว';
-      else if (subtotal < cfg.COUPON_MIN_BILL) couponWhy = 'ยอดยังไม่ถึง ' + cfg.COUPON_MIN_BILL + ' บาท คูปองยังไม่ทำงาน';
-      else if (eligible <= 0) couponWhy = 'คูปองใช้ได้กับสินค้าป้าย ร่วมโปร และเซ็ตคุ้มเท่านั้น';
-      else coupon = Math.min(Math.round(eligible * cfg.COUPON_PCT / 100), cfg.COUPON_CAP);
+      else if (subtotal < minB) couponWhy = 'ยอดยังไม่ถึง ' + minB.toLocaleString('en-US') + ' บาท คูปองยังไม่ทำงาน';
+      else if (base <= 0) couponWhy = 'คูปองใช้ได้กับสินค้าร่วมรายการและเซ็ตคุ้มเท่านั้น';
+      else coupon = couponAmt ? Math.min(couponAmt, base) : Math.min(Math.round(base * couponPct / 100), couponCap || 1e9);
     }
     var bal = Math.max(0, Math.floor(Number(ctx.coinBal) || 0));
-    var coinMax = Math.max(0, Math.floor((subtotal - coupon) * cfg.COIN_MAX_PCT / 100 / cfg.COIN_VALUE));
+    var coinBase = Math.max(0, subtotal - coupon), coinMax = Math.max(0, Math.floor(coinBase * cfg.COIN_MAX_PCT / 100 / cfg.COIN_VALUE));
+    var coinWhy = '';
+    if (cfg.COIN_SCOPE !== 'all') { // ส่วนลดสะสมใช้ได้เฉพาะสินค้าร่วมรายการ
+      var elig = Math.max(0, Math.floor((eligible - (plan.scope === 'all' ? Math.min(coupon, Math.max(0, coupon - (subtotal - eligible))) : coupon)) / cfg.COIN_VALUE));
+      if (coinMax > elig) coinMax = elig;
+      if (bal > 0 && coinMax <= 0 && subtotal > 0) coinWhy = 'ส่วนลดสะสมใช้ได้กับสินค้าร่วมรายการและเซ็ตคุ้มเท่านั้น';
+    }
     var coinUse = cart.useCoin ? Math.min(bal, coinMax) : 0;
     var net = subtotal - coupon - coinUse * cfg.COIN_VALUE;
-    var mode = (cart.mode === 'pickup' && m && m.sourceKind === 'sign') ? 'pickup' : 'deliver';
+    var mode = (cart.mode === 'shop' && cfg.PICKUP_SHOP !== false) ? 'shop' : (cart.mode === 'pickup' && m && m.sourceKind === 'sign') ? 'pickup' : 'deliver';
+    var evening = mode === 'deliver' && !!cart.evening && cfg.EVENING_ENABLED !== false; // รอบเย็น: ขั้นต่ำของรอบเย็น ไม่มีส่งรวมรอบ
     var min = cfg.MIN_ORDER;
-    if (mode === 'pickup') min = 0;
+    if (mode !== 'deliver') min = 0;
+    else if (evening) min = Number(cfg.EVENING_MIN) || 0;
     else if (m && m.sourceKind === 'ref' && m.inZone && m.regDate && daysBetween(m.regDate, today) <= cfg.NEW_MIN_DAYS) min = cfg.NEW_MIN_ORDER;
-    var belowMin = mode !== 'pickup' && subtotal > 0 && subtotal < min;
-    return { lines: lines, bundles: bl, subtotal: subtotal, eligible: eligible, coupon: coupon, couponWhy: couponWhy,
-      coinBal: bal, coinMax: coinMax, coinUse: coinUse, net: net, kg: Math.round(kgSum * 10) / 10, mode: mode, min: min,
-      belowMin: belowMin, count: lines.length + bl.length, errors: errors };
+    var belowMin = mode === 'deliver' && subtotal > 0 && subtotal < min;
+    var poolMin = Number(cfg.POOL_MIN) || 0;
+    var pool = !evening && belowMin && (poolMin <= 0 || subtotal >= poolMin); // ต่ำกว่าขั้นต่ำ แต่รับแบบ "รอรวมรอบ" ได้ (POOL_MIN 0 = รับทุกยอดเหมือนเดิม)
+    var tooSmall = belowMin && !pool;
+    return { lines: lines, bundles: bl, subtotal: subtotal, eligible: eligible, coupon: coupon, couponWhy: couponWhy, couponPct: couponPct, couponCap: couponCap, couponAmt: couponAmt, couponStep: step, couponBills: plan.bills,
+      couponScope: plan.scope, coinBal: bal, coinMax: coinMax, coinUse: coinUse, coinWhy: coinWhy, net: net, kg: Math.round(kgSum * 10) / 10, mode: mode, min: min, evening: evening,
+      belowMin: belowMin, pool: pool, tooSmall: tooSmall, poolMin: poolMin, count: lines.length + bl.length, errors: errors };
   }
   /* ===== จบส่วนคำนวณ ===== */
 
@@ -304,15 +362,21 @@
 
   /* ---------- เชื่อมหลังบ้าน: ลองใหม่อัตโนมัติ + กันกดซ้ำ (rid) ---------- */
   var READS = { catalog: 1, ping: 1, init: 1, me: 1, myOrders: 1, order: 1, wallet: 1, invite: 1, standing: 1, partnerDash: 1, roundInfo: 1, linkFind: 1, staffInviteInfo: 1,
-    adminData: 1, adminPoll: 1, exportData: 1, slipImage: 1, selfTest: 1 };
+    adminData: 1, adminPoll: 1, exportData: 1, slipImage: 1, selfTest: 1, memberLinkInfo: 1 };
   function rid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 10); }
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
   function netErr(kind, status) { var e = new Error(kind); e.code = 'NET'; e.kind = kind; e.status = status || 0; return e; }
+  /* เปิดหน้าจากข้อมูลในเครื่องได้ก่อน LINE พร้อม → คำสั่งที่ต้องใช้ token รอจน LINE พร้อม */
+  var liffReady = null, readyResolve = null;
+  liffReady = new Promise(function (res) { readyResolve = res; });
+  var PERF = [];
+  function perfAdd(action, ms, sms, ok) { PERF.push({ a: action, ms: ms, sms: sms || 0, ok: ok, t: Date.now() }); if (PERF.length > 300) PERF.shift(); }
   function api(action, data, opt) {
     opt = opt || {};
     var isRead = !!READS[action], body = Object.assign({ action: action }, data || {});
     if (!isRead) body.rid = body.rid || rid();
-    var tries = opt.tries || (isRead ? 4 : 3);
+    if (S.asRole) body.asRole = S.asRole; // ผู้จัดการทดสอบบทบาทอื่น (หลังบ้านลดสิทธิ์ให้เท่านั้น)
+    var tries = opt.tries || (isRead ? 4 : 3), t0 = Date.now();
     function attempt(n) {
       try { body.token = liff.getAccessToken() || ''; } catch (e) { body.token = ''; }
       var ctrl = window.AbortController ? new AbortController() : null;
@@ -323,6 +387,7 @@
           var j; try { j = JSON.parse(t); } catch (x) { throw netErr(/<html/i.test(t) ? 'HTML' : 'NOTJSON'); }
           if (!j || !j.ok) { var e = new Error((j && j.error) || 'เกิดข้อผิดพลาด'); e.code = (j && j.code) || 'SERVER'; e.detail = j && j.detail; e.server = true; throw e; }
           if (timer) clearTimeout(timer);
+          perfAdd(action, Date.now() - t0, j.ms, true);
           return j;
         })
         .catch(function (e) {
@@ -334,14 +399,16 @@
             if (n >= 1 && !opt.quiet) toast('สัญญาณช้า กำลังลองใหม่ให้อัตโนมัติ (' + (n + 1) + '/' + (tries - 1) + ')', 2500);
             return sleep(Math.min(6000, 700 * Math.pow(2, n)) + Math.random() * 400).then(function () { return attempt(n + 1); });
           }
+          perfAdd(action, Date.now() - t0, 0, false);
           throw e;
         });
     }
-    return attempt(0);
+    return (action === 'catalog' || action === 'ping' ? Promise.resolve() : liffReady).then(function () { return attempt(0); });
   }
   /* ข้อความที่ลูกค้าเห็น: สั้น ไม่มีศัพท์เทคนิค (พนักงานเห็นรายละเอียดเพิ่ม) */
   function friendly(e) {
     if (!e) return 'เกิดข้อผิดพลาด กรุณาลองใหม่';
+    if (e.code === 'RATE') return 'ใช้งานถี่เกินไป กรุณารอ 1 นาทีแล้วลองใหม่';
     if (e.code === 'NET') return e.kind === 'TIMEOUT' ? 'ร้านตอบช้ากว่าปกติ กรุณาลองอีกครั้ง' : e.kind === 'OFFLINE' ? 'ไม่มีสัญญาณอินเทอร์เน็ต กรุณาตรวจการเชื่อมต่อแล้วลองใหม่' : 'เชื่อมต่อร้านไม่สำเร็จชั่วคราว กรุณาลองใหม่อีกครั้ง';
     return e.message || 'เกิดข้อผิดพลาด กรุณาลองใหม่';
   }
@@ -377,7 +444,7 @@
     }).catch(function (e) { if (S.page !== page) return; if (hit) toast('อัปเดตไม่สำเร็จ แสดงข้อมูลล่าสุดที่มี', 2500); else fail(e); });
   }
   function formBusy() { var a = document.activeElement; return !!(a && app.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && a.type !== 'checkbox' && a.type !== 'radio' && a.type !== 'file'); }
-  function pageTitle() { return { bills: 'บิลของฉัน', bill: 'บิล', invite: 'ชวนเพื่อน', wallet: 'Coin & คูปอง', standing: 'สั่งประจำ', partner: 'ยอดป้ายของฉัน' }[S.page] || ''; }
+  function pageTitle() { return { bills: 'บิลของฉัน', bill: 'บิล', invite: 'ชวนเพื่อน', wallet: 'ส่วนลดของฉัน', standing: 'สั่งประจำ', partner: 'ยอดป้ายของฉัน' }[S.page] || ''; }
   function qrSvg(text) { try { return QR.svg(text, 4); } catch (e) { return '<div class="hint">' + esc(e.message) + '</div>'; } }
   function copyText(t) {
     function fallback() { var i = document.createElement('input'); i.value = t; document.body.appendChild(i); i.select(); try { document.execCommand('copy'); toast('คัดลอกแล้ว'); } catch (e) { toast(t); } i.remove(); }
@@ -414,9 +481,52 @@
   function calcNow() {
     var m = S.me && S.me.member;
     return calcCart(S.cart, { products: S.cat.products, bundles: S.cat.bundles, cfg: S.cat.cfg, today: S.cat.today, coinBal: S.me ? S.me.coinBal : 0,
-      member: m ? { couponLeft: m.couponLeft, couponExpires: m.couponExpires, sourceKind: m.sourceKind, inZone: m.inZone, regDate: m.regDate } : null });
+      member: m ? { type: m.type, couponLeft: m.couponLeft, couponExpires: m.couponExpires, sourceKind: m.sourceKind, inZone: m.inZone, regDate: m.regDate, offer: S.me.offer || null } : null });
   }
   function prod(sku) { return S.cat.products.filter(function (p) { return p.sku === sku; })[0]; }
+  /* รอบส่งที่ร้านจะจัดให้ (กติกาเดียวกับหลังบ้าน): สั่งก่อนปิดรับของรอบไหน ได้รอบนั้น · หลังรอบสุดท้าย = รอบเช้าพรุ่งนี้ */
+  function waves() {
+    var w = String(S.cat.cfg.WAVES || '').split('|').map(function (x) { var t = x.split(':'); return t.length >= 5 ? { name: t[0].trim(), depart: t[1] + ':' + t[2], cutoff: t[3] + ':' + t[4] } : null; }).filter(Boolean);
+    return w.length ? w : [{ name: 'รอบเช้า', depart: '07:00', cutoff: '20:00' }, { name: 'รอบสาย', depart: '11:00', cutoff: '09:00' }, { name: 'รอบบ่าย', depart: '14:30', cutoff: '13:00' }];
+  }
+  function waveNow() {
+    var W = waves(), t = nowHM(), today = todayStr(), i;
+    function tmr() { var d = new Date(); d.setDate(d.getDate() + 1); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); }
+    for (i = 1; i < W.length; i++) if (t < W[i].cutoff) return { slot: W[i].name, date: today, depart: W[i].depart };
+    if (t < W[0].cutoff) return { slot: W[0].name, date: tmr(), depart: W[0].depart };
+    i = Math.min(1, W.length - 1); return { slot: W[i].name, date: tmr(), depart: W[i].depart };
+  }
+  function autoSlot() { return String(S.cat.cfg.SLOT_MODE || 'auto') !== 'choose'; }
+  function couponStrip(cp) {
+    if (!cp || !(cp.left > 0) || !(cp.expires >= S.cat.today)) return '';
+    var txt = cp.text || ('ลด ' + cp.pct + '%' + (cp.cap ? ' (สูงสุด ' + baht(cp.cap) + ')' : ''));
+    return '<div class="coupon-strip">' + icon('wallet') + '<span><b>ส่วนลดลูกค้าใหม่ บิลถัดไป' + esc(txt) + '</b><small>ใช้ได้อีก ' + cp.left + ' บิล · ' + (cp.scope === 'all' ? 'ทุกสินค้า' : 'สินค้าร่วมรายการและเซ็ตคุ้ม') + (cp.minBill > 0 ? ' · ขั้นต่ำ ' + baht(cp.minBill) : '') + ' · ถึง ' + esc(thDate(cp.expires)) + '</small></span></div>';
+  }
+  /* กติกาส่วนลดจากแท็บ Offers (ตรงกับหลังบ้าน) */
+  function anyOf(v, want) { v = String(v || ''); return !v || v === 'any' || v === '*' || v.split(/[,|\s]+/).indexOf(want) >= 0; }
+  function offerFor(kind, type, source) { return ((S.cat && S.cat.cfg.OFFERS) || []).filter(function (o) { return o.kind === kind && anyOf(o.memberType, type) && (kind === 'referrer' || anyOf(o.source, source)); })[0] || null; }
+  function offerText(o) {
+    if (!o) return '';
+    var pl = couponPlan(S.cat.cfg, o.memberType, o);
+    return pl.amts.map(function (a, i) { return (pl.bills > 1 ? 'บิลที่ ' + (i + 1) + ' ' : 'บิลแรก ') + stepText(pl, i) + (pl.mins[Math.min(i, pl.mins.length - 1)] > 0 ? ' (ขั้นต่ำ ' + baht(pl.mins[Math.min(i, pl.mins.length - 1)]) + ')' : ''); }).join(' · ');
+  }
+  function rewardText(o) {
+    var c = S.cat.cfg; if (!o) return 'ส่วนลดสะสม ' + c.COIN_PCT + '% ของยอดบิลเพื่อน นาน ' + c.COIN_MONTHS + ' เดือน';
+    var st = offerPlan(o).steps; return st.map(function (x, i) { return (x.amt ? baht(x.amt) : x.pct + '% ของยอด') + (st.length > 1 ? ' เมื่อเพื่อนจ่ายบิลที่ ' + (i + 1) : ' เมื่อเพื่อนจ่ายบิลแรก'); }).join(' + ');
+  }
+  /* รอบเย็น (Evening Extension) */
+  function evCfg() { return (S.cat && S.cat.cfg.EVENING) || null; }
+  function evOn() { var e = evCfg(); return !!(e && e.enabled && S.me && S.me.evening); }
+  function evDayText(d) { return d === todayStr() ? 'คืนนี้' : 'คืน' + dayName(d) + 'ที่ ' + thDate(d); }
+  function needBySelect(val, id) {
+    var opts = String(S.cat.cfg.NEEDBY_OPTIONS || '').split('|').map(function (x) { return x.trim(); }).filter(Boolean);
+    return '<select id="' + id + '" data-chg="needBy"><option value="">ไม่กำหนด (ตามรอบปกติ)</option>' + opts.map(function (o) { return '<option value="' + o + '"' + (val === o ? ' selected' : '') + '>ก่อน ' + o + ' น.</option>'; }).join('') + '</select>';
+  }
+  function tradeSelect(val, id, name) {
+    var opts = String(S.cat.cfg.TRADES || '').split('|').map(function (x) { return x.trim(); }).filter(Boolean);
+    if (!opts.length) return '';
+    return '<div class="field"><label for="' + id + '">ประเภทธุรกิจ</label><select id="' + id + '" name="' + name + '"><option value="">เลือก</option>' + opts.map(function (o) { return '<option' + (val === o ? ' selected' : '') + '>' + esc(o) + '</option>'; }).join('') + '</select></div>';
+  }
 
   /* ---------- นำทาง ---------- */
   var MEMBER_PAGES = { catalog: 1, cart: 1, bills: 1, bill: 1, invite: 1, wallet: 1, standing: 1, card: 1, reorder: 1 };
@@ -458,6 +568,7 @@
     if (p === 'partnerjoin') return pagePartnerJoin();
     if (p === 'partner') return pagePartner();
     if (p === 'link') return pageLink();
+    if (p === 'join') return pageJoin();
     if (p === 'register') return m ? pageHome() : pageRegister();
     if (MEMBER_PAGES[p] && (!m || m.rejected)) return m && m.rejected ? pageRejected() : pageHome();
     if (p === 'reorder') return doReorder();
@@ -486,18 +597,20 @@
         demoNote() + staffLinks() + '</div>');
     }
     if (m.rejected) return pageRejected();
-    var h = top('สวัสดีค่ะ ' + m.name, m.sno ? 'สมาชิก ' + m.sno : 'รอร้านยืนยันสมาชิก · สั่งของได้แล้ว', false) + '<div class="wrap">';
+    var sh = S.me.shared || {};
+    var h = top('สวัสดีค่ะ ' + (sh.owner === false && sh.me ? sh.me + ' · ' : '') + m.name, (m.sno ? 'สมาชิก ' + m.sno : 'รอร้านยืนยันสมาชิก · สั่งของได้แล้ว') + (sh.owner === false ? ' · ใช้บัญชีร่วมกับ ' + (sh.ownerName || 'เจ้าของร้าน') : ''), false) + '<div class="wrap">';
+    if (S.me.eveningDue) h += '<button class="notice warn" data-a="go" data-p="bill" data-id="' + esc(S.me.eveningDue.id) + '">' + icon('clock') + '<span><b>รอบเย็น' + esc(evDayText(S.me.eveningDue.date)) + ': โอนก่อน ' + esc(S.me.eveningDue.payBy.slice(11, 16)) + ' น. · ' + baht(S.me.eveningDue.amount) + '</b><small>แตะเพื่อสแกน QR และแนบสลิป · ไม่ทันเวลา ระบบเลื่อนเป็นคืนถัดไปให้</small></span>' + icon('arrow') + '</button>';
     if (S.me.unpaid) h += '<button class="notice warn" data-a="go" data-p="bills">' + icon('bill') + '<span><b>มีบิลรอชำระ ' + S.me.unpaid.count + ' ใบ · ' + baht(S.me.unpaid.amount) + '</b><small>แตะเพื่อดู QR และแนบสลิป</small></span>' + icon('arrow') + '</button>';
     if (S.me.outForDelivery) h += '<button class="notice info" data-a="go" data-p="bills">' + icon('truck') + '<span><b>ออเดอร์กำลังนำส่ง</b><small>ได้รับของแล้ว กดยืนยันในหน้าบิลได้เลย</small></span>' + icon('arrow') + '</button>';
     if (S.me.friend === false && addFriendUrl()) h += '<button class="notice ok" data-a="addFriend">' + icon('bell') + '<span><b>เพิ่มเพื่อน LINE OA ของร้าน</b><small>เพื่อรับบิลยอดจริงและแจ้งเตือนในแชต</small></span>' + icon('arrow') + '</button>';
     h += hero();
     h += '<div class="section-heading"><h2>วันนี้ให้เราช่วยอะไรดี?</h2></div><div class="tiles">' +
       menuTile('catalog', 'สั่งของ', 'ดูราคา · เซ็ตคุ้ม', 'bag', true) + menuTile('reorder', 'สั่งเหมือนเดิม', 'จากออเดอร์ล่าสุด', 'repeat') + menuTile('bills', 'บิลของฉัน', 'ดูยอด · แจ้งชำระ', 'bill') +
-      menuTile(S.me.canRefer ? 'invite' : 'card', S.me.canRefer ? 'ชวนเพื่อน' : 'บัตรสมาชิก', S.me.canRefer ? 'ดูสิทธิ์รับ Coin' : 'แสดง QR ที่ร้าน', S.me.canRefer ? 'invite' : 'card') +
-      menuTile('wallet', 'Coin & คูปอง', 'ส่วนลดของคุณ', 'wallet') + menuTile('standing', 'สั่งประจำ', 'จัดการรายการประจำ', 'clock') + '</div>';
-    h += '<button class="benefit-strip" data-a="go" data-p="wallet"><span class="benefit-icon">' + icon('coin') + '</span><span><small>Coin พร้อมใช้</small><b>' + fmt(S.me.coinBal) + ' <span>Coin</span></b></span><span class="benefit-end">' +
-      (S.me.coinPending ? 'รออนุมัติ ' + fmt(S.me.coinPending) + '<br>' : '') + (m.credit > 0 ? 'เครดิต ' + baht(m.credit) + '<br>' : '') + 'ดูสิทธิ์ของฉัน →</span></button>';
-    if (m.couponLeft > 0 && m.couponExpires >= S.cat.today) h += '<div class="coupon-strip">' + icon('wallet') + '<span><b>คูปองลด ' + S.cat.cfg.COUPON_PCT + '% · เหลือ ' + m.couponLeft + ' บิล</b><small>สินค้าร่วมโปรและเซ็ตคุ้ม · ถึง ' + esc(thDate(m.couponExpires)) + '</small></span></div>';
+      menuTile(S.me.canRefer ? 'invite' : 'card', S.me.canRefer ? 'ชวนเพื่อน' : 'บัตรสมาชิก', S.me.canRefer ? 'รับส่วนลดสะสม' : 'แสดง QR ที่ร้าน', S.me.canRefer ? 'invite' : 'card') +
+      menuTile('wallet', 'ส่วนลดของฉัน', 'ส่วนลดสะสม · คูปอง', 'wallet') + menuTile('standing', 'สั่งประจำ', 'จัดการรายการประจำ', 'clock') + '</div>';
+    h += '<button class="benefit-strip" data-a="go" data-p="wallet"><span class="benefit-icon">' + icon('coin') + '</span><span><small>ส่วนลดสะสมพร้อมใช้</small><b>' + baht(S.me.coinBal) + '</b></span><span class="benefit-end">' +
+      (S.me.coinPending ? 'รออนุมัติ ' + baht(S.me.coinPending) + '<br>' : '') + (m.credit > 0 ? 'เครดิต ' + baht(m.credit) + '<br>' : '') + 'ดูสิทธิ์ของฉัน →</span></button>';
+    h += couponStrip(S.me.coupon);
     h += staffLinks() + demoNote() + '</div>';
     render(h);
   }
@@ -515,15 +628,18 @@
     return '<div class="geo-box"><button type="button" class="btn sm" data-a="geo">' + icon('pin') + (g ? ' ปักหมุดใหม่' : ' ปักหมุดตำแหน่งร้าน') + '</button><span class="hint">' + (g ? 'ปักหมุดแล้ว ✓ ช่วยให้จัดรอบส่งได้เร็วขึ้น' : 'ไม่บังคับ · กดตอนอยู่ที่ร้าน') + '</span></div>';
   }
   function pageRegister() {
-    var pr = S.params, isSign = !!pr.src && !pr.ref;
-    var banner = '';
-    if (pr.ref) banner = '<div class="alert ok">คุณได้รับคำชวน ลงทะเบียนแล้วรับคูปองลูกค้าใหม่ ' + S.cat.cfg.COUPON_PCT + '% (' + S.cat.cfg.COUPON_BILLS + ' บิลแรก)</div>';
-    if (isSign) banner = '<div class="alert ok">ลงทะเบียนเพื่อรับของที่จุดรับ รอบ ' + esc(S.cat.cfg.CONDO_TIME) + ' ได้ทุกวัน</div>';
+    var pr = S.params, isSign = !!pr.src && !pr.ref, cfg = S.cat.cfg, planC = couponPlan(cfg, 'Consumer');
+    var ty = S.ui.regType || (isSign ? 'Consumer' : 'FS'), src = pr.ref ? 'ref' : isSign ? 'sign' : 'self', of = offerFor('welcome', isSign ? 'Consumer' : ty, src);
+    var banner = '', offer = of ? offerText(of) : planC.pcts[0] > 0 ? 'ลูกค้าใหม่รับส่วนลดบิลแรก ' + planC.pcts[0] + '%' + (planC.pcts[1] ? ' และบิลที่สอง ' + planC.pcts[1] + '%' : '') + ' สำหรับสินค้าร่วมรายการ' : '';
+    if (of && offer) offer = 'ลูกค้าใหม่' + (ty === 'FS' && !isSign ? ' (ร้านอาหาร)' : '') + ' รับส่วนลด ' + offer;
+    if (pr.ref) banner = '<div class="alert ok">คุณได้รับคำชวน ' + esc(offer || 'ลงทะเบียนแล้วสั่งได้เลย') + '</div>';
+    if (isSign) banner = '<div class="alert ok">' + (offer ? esc(offer) + ' · ' : '') + 'รับของที่จุดรับ รอบ ' + esc(cfg.CONDO_TIME) + ' หรือให้ส่งถึงบ้านได้</div>';
     var h = top('ลงทะเบียน', 'ใช้เวลาไม่ถึง 1 นาที', S.history.length > 0) + '<div class="wrap">' + banner + '<form class="box form" data-form="register">' +
       '<div class="field"><label for="rg-name">' + (isSign ? 'ชื่อ' : 'ชื่อร้าน') + '</label><input id="rg-name" name="name" required maxlength="80" autocomplete="organization"></div>' +
       (isSign ? '<div class="field"><label for="rg-addr">ตึก / ห้อง</label><input id="rg-addr" name="address" maxlength="120" placeholder="เช่น ตึก A ห้อง 1208"></div>' :
         '<div class="field"><label for="rg-contact">ชื่อผู้ติดต่อ</label><input id="rg-contact" name="contact" maxlength="60" autocomplete="name"></div>' +
-        '<div class="field"><label for="rg-type">ประเภท</label><select id="rg-type" name="type"><option value="FS">ร้านอาหาร / แม่ค้า / แคเทอริ่ง</option><option value="Consumer">บ้าน</option></select></div>' +
+        '<div class="field"><label for="rg-type">ประเภท</label><select id="rg-type" name="type" data-chg="regType"><option value="FS"' + (ty === 'FS' ? ' selected' : '') + '>ร้านอาหาร / แม่ค้า / แคเทอริ่ง</option><option value="Consumer"' + (ty === 'Consumer' ? ' selected' : '') + '>บ้าน / ครัวเรือน</option></select></div>' +
+        (ty === 'FS' ? tradeSelect('', 'rg-trade', 'trade') : '') +
         '<div class="field"><label for="rg-zone">ย่านที่ให้ส่ง</label>' + zoneSelect('zone', '', 'rg-zone') + '</div>' +
         '<div class="field"><label for="rg-addr">ที่อยู่จัดส่ง / จุดสังเกต</label><textarea id="rg-addr" name="address" rows="2" maxlength="200" autocomplete="street-address"></textarea></div>' + geoBox()) +
       '<div class="field"><label for="rg-phone">เบอร์โทร</label><input id="rg-phone" name="phone" type="tel" autocomplete="tel" inputmode="tel" required maxlength="20" placeholder="0812345678"></div>' +
@@ -557,15 +673,19 @@
     h += '<div class="catalog-tools"><label class="search-box" for="catalog-search">' + icon('search') + '<input type="search" id="catalog-search" placeholder="ค้นหาสินค้า หรือรหัสสินค้า" aria-label="ค้นหาสินค้า หรือรหัสสินค้า" value="' + esc(S.ui.search || '') + '" autocomplete="off"></label><div class="chips" aria-label="หมวดสินค้า">' + [['all', 'ทั้งหมด'], ['set', 'เซ็ตคุ้ม']].concat(cats.map(function (k) { return [k, catLabel(k)]; })).map(function (x) {
       return '<button class="chip' + (f === x[0] ? ' on' : '') + '" data-a="cat" data-p="' + esc(x[0]) + '" aria-pressed="' + (f === x[0]) + '">' + x[1] + '</button>';
     }).join('') + '</div></div>';
-    if (m.couponLeft > 0 && m.couponExpires >= S.cat.today) h += '<div class="coupon-strip">' + icon('wallet') + '<span><b>ใช้คูปองลด ' + S.cat.cfg.COUPON_PCT + '% ได้อีก ' + m.couponLeft + ' บิล</b><small>เฉพาะสินค้าร่วมโปรและเซ็ตคุ้ม · ตามเงื่อนไขคูปอง</small></span></div>';
+    h += couponStrip(S.me.coupon);
     if (f === 'all' || f === 'set') {
-      var bs = S.cat.bundles.filter(function (b) { return b.active && (matches(b.name, b.id) || b.items.some(function (it) { var p = prod(it[0]); return p && matches(p.name, p.sku); })); }).sort(function (a, b) { return (b['for'] === m.type) - (a['for'] === m.type); });
+      var mine = {}; (S.me.lastSkus || []).forEach(function (k) { mine[k] = 1; });
+      function score(b) { var n = 0; b.items.forEach(function (it) { if (mine[it[0]]) n++; }); return (b['for'] === m.type ? 10 : 0) + (b['for'] ? 0 : 5) + n; }
+      function soldOut(b) { return b.items.some(function (it) { var p = prod(it[0]); return !p || !p.inStock; }); } // สินค้าในเซ็ตหมด = ซ่อนเซ็ต (sync stock)
+      var bs = S.cat.bundles.filter(function (b) { return b.active && !soldOut(b) && (matches(b.name, b.id) || b.items.some(function (it) { var p = prod(it[0]); return p && matches(p.name, p.sku); })); }).sort(function (a, b) { return score(b) - score(a); });
       if (bs.length) {
         results += bs.length;
         h += '<section class="bundle-section"><div class="section-heading"><h2>' + icon('set') + ' เซ็ตคุ้ม</h2><span class="badge">ร่วมโปร</span></div><p class="section-sub">จัดเป็นเซ็ต เลือกง่าย คุมงบได้</p><div class="bundle-grid">' + bs.map(function (b) {
           var normal = 0, names = [];
           b.items.forEach(function (it) { var p = prod(it[0]); if (p) { normal += unitPrice(p, it[1]) * it[1]; names.push(p.name.replace(/\s*\(ตัวอย่าง\)/, '') + ' ×' + it[1]); } });
-          return '<article class="bundle">' + (b.img ? '<img class="bundle-photo" src="' + esc(imgUrl(b.img, 480)) + '" alt="" loading="lazy" decoding="async" data-fb="set">' : '') + '<div class="bundle-top"><span class="bundle-label">' + (b['for'] === 'FS' ? 'สำหรับร้านอาหาร' : 'สำหรับครอบครัว') + '</span>' + (b.img ? '' : icon('set')) + '</div><h3 class="nm">' + esc(b.name) + '</h3><div class="it">' + esc(names.join(' · ')) + '</div><div class="bundle-buy"><div><b class="price">' + baht(b.price) + '</b> <small>/ เซ็ต</small>' + (normal > b.price ? '<div class="saving"><s>' + baht(normal) + '</s> ประหยัด ' + baht(normal - b.price) + '</div>' : '') + '</div>' + stepper('b', b.id, c.bundles[b.id] || 0) + '</div></article>';
+          var forMe = b.items.some(function (it) { return mine[it[0]]; });
+          return '<article class="bundle' + (forMe ? ' for-me' : '') + '">' + (b.img ? '<img class="bundle-photo" src="' + esc(imgUrl(b.img, 480)) + '" alt="" loading="lazy" decoding="async" data-fb="set">' : '') + '<div class="bundle-top"><span class="bundle-label">' + (forMe ? '★ แนะนำสำหรับคุณ' : b['for'] === 'FS' ? 'สำหรับร้านอาหาร' : 'สำหรับครอบครัว') + '</span>' + (b.img ? '' : icon('set')) + '</div><h3 class="nm">' + esc(b.name) + '</h3><div class="it">' + esc(names.join(' · ')) + '</div><div class="bundle-buy"><div><b class="price">' + baht(b.price) + '</b> <small>/ เซ็ต</small>' + (normal > b.price ? '<div class="saving"><s>' + baht(normal) + '</s> ประหยัด ' + baht(normal - b.price) + '</div>' : '') + '</div>' + stepper('b', b.id, c.bundles[b.id] || 0) + '</div></article>';
         }).join('') + '</div><p class="hint">ราคาเซ็ตคงที่ ไม่รวมส่วนลดราคาขั้นบันได</p></section>';
       }
     }
@@ -599,6 +719,8 @@
     var slots = String(cfg.SLOTS || '').split('|');
     if (!c.slot || slots.indexOf(c.slot) < 0) c.slot = slots[0];
     if (m.sourceKind === 'sign' && !c.modeSet) { c.mode = 'pickup'; c.modeSet = true; }
+    if (c.needBy === undefined) c.needBy = m.needBy || '';
+    if (c.evening && (!evOn() || (c.mode && c.mode !== 'deliver'))) c.evening = false;
     var k = calcNow();
     var h = top('ตะกร้า', '', true) + '<div class="wrap">';
     if (!k.count) { render(h + '<div class="empty">' + icon('bag') + '<b>ตะกร้ายังว่างอยู่</b><span>เลือกวัตถุดิบที่ต้องการ แล้วกลับมาตรวจรายการที่นี่</span></div><button class="btn pri block" data-a="go" data-p="catalog">เลือกสินค้า</button></div>'); return; }
@@ -606,29 +728,44 @@
     h += '<div class="section-heading"><h2>ตรวจรายการของคุณ</h2><button class="text-btn" data-a="go" data-p="catalog">+ เพิ่มสินค้า</button></div><div class="box cart-items">' +
       k.bundles.map(function (l) { return '<article class="cart-item"><div><h3>' + esc(l.name) + ' <span class="badge">เซ็ต</span></h3><small class="hint">' + baht(l.price) + ' / เซ็ต</small></div><strong class="num">' + baht(l.total) + '</strong>' + stepper('b', l.id, l.qty) + '</article>'; }).join('') +
       k.lines.map(function (l) { return '<article class="cart-item"><div><h3>' + esc(l.name) + (l.promo ? ' <span class="badge">ร่วมโปร</span>' : '') + '</h3><small class="hint">' + baht(l.price) + ' / ' + esc(l.unit) + '</small></div><strong class="num">' + baht(l.total) + '</strong>' + stepper('p', l.sku, l.qty) + '</article>'; }).join('') + '</div>';
-    if (k.coinBal > 0) h += '<label class="box chk coin-toggle"><input type="checkbox" data-chg="useCoin"' + (c.useCoin ? ' checked' : '') + '><span><b>ใช้ Coin เป็นส่วนลด</b><small>มี ' + fmt(k.coinBal) + ' Coin · ใช้ได้ ' + fmt(Math.min(k.coinBal, k.coinMax)) + ' Coin<br>สูงสุด ' + cfg.COIN_MAX_PCT + '% ของบิล</small></span>' + icon('coin') + '</label>';
+    if (k.coinBal > 0) h += '<label class="box chk coin-toggle"><input type="checkbox" data-chg="useCoin"' + (c.useCoin ? ' checked' : '') + (k.coinMax <= 0 ? ' disabled' : '') + '><span><b>ใช้ส่วนลดสะสม</b><small>มี ' + baht(k.coinBal) + ' · ใช้ได้ ' + baht(Math.min(k.coinBal, k.coinMax)) + ' ในบิลนี้<br>' + (k.coinWhy ? esc(k.coinWhy) : 'สินค้าร่วมรายการและเซ็ตคุ้ม · สูงสุด ' + cfg.COIN_MAX_PCT + '% ของบิล') + '</small></span>' + icon('coin') + '</label>';
     h += '<section class="box order-summary"><h3>สรุปยอดประมาณ</h3><div class="row"><span>รวมสินค้า (' + k.count + ' รายการ)</span><span class="num">' + baht(k.subtotal) + '</span></div>' +
-      (k.coupon ? '<div class="row disc"><span>คูปองลูกค้าใหม่ ' + cfg.COUPON_PCT + '%</span><span class="num">−' + baht(k.coupon) + '</span></div>' : '') +
-      (k.coinUse ? '<div class="row disc"><span>ใช้ ' + fmt(k.coinUse) + ' Coin</span><span class="num">−' + baht(k.coinUse * cfg.COIN_VALUE) + '</span></div>' : '') +
+      (k.coupon ? '<div class="row disc"><span>ส่วนลดลูกค้าใหม่ บิลที่ ' + (k.couponStep + 1) + ' (' + (k.couponAmt ? baht(k.couponAmt) : k.couponPct + '%') + ')</span><span class="num">−' + baht(k.coupon) + '</span></div>' : '') +
+      (k.coinUse ? '<div class="row disc"><span>ส่วนลดสะสม</span><span class="num">−' + baht(k.coinUse * cfg.COIN_VALUE) + '</span></div>' : '') +
       '<div class="row tot"><span>ยอดประมาณสุทธิ</span><strong class="price num">' + baht(k.net) + '</strong></div>' +
       (m.credit > 0 ? '<div class="hint">มีเครดิต ' + baht(m.credit) + ' ระบบหักให้ตอนออกบิลยอดจริง</div>' : '') +
       (k.couponWhy ? '<div class="hint">' + esc(k.couponWhy) + '</div>' : '') + '<p class="hint">ยอดจริงจะแจ้งในแชตหลังชั่งสินค้า · ประมาณ ' + k.kg + ' กก.</p></section>';
-    if (m.sourceKind === 'sign') {
-      var r = S.ui.round;
-      h += '<div class="box"><h3>รับของ</h3><label class="chk"><input type="radio" name="mode" value="pickup" data-chg="mode"' + (c.mode === 'pickup' ? ' checked' : '') + '><span>รับที่จุดรับ รอบ ' + esc(cfg.CONDO_TIME) + ' (ไม่มีขั้นต่ำต่อคน)</span></label>' +
-        '<label class="chk"><input type="radio" name="mode" value="deliver" data-chg="mode"' + (c.mode !== 'pickup' ? ' checked' : '') + '><span>ส่งถึงห้อง (ขั้นต่ำ ' + baht(cfg.MIN_ORDER) + ')</span></label>';
-      if (c.mode === 'pickup' && r) { var after = r.total + k.subtotal; h += '<div class="alert ' + (after >= r.min ? 'ok' : 'warn') + '" style="margin-top:6px">ยอดรวมจุดรับวันนี้ ' + baht(after) + ' / ' + baht(r.min) + (after >= r.min ? ' · รอบออกแน่นอน' : ' · ขาดอีก ' + baht(r.min - after) + ' ถ้าไม่ครบ เลื่อนเป็นรอบพรุ่งนี้') + ' · ของรอที่จุดรับได้ ' + r.hold + ' นาที</div>'; }
-      h += '</div>';
-    } else {
-      h += '<div class="box field"><label for="slot">เลือกรอบจัดส่ง</label><select id="slot" data-chg="slot">' + slots.map(function (s) { return '<option' + (c.slot === s ? ' selected' : '') + '>' + esc(s) + '</option>'; }).join('') + '</select>' +
-        (cfg.ORDER_CUTOFF && nowHM() >= cfg.ORDER_CUTOFF ? '<div class="hint">สั่งหลัง ' + esc(cfg.ORDER_CUTOFF) + ' น. ร้านจะส่งให้พรุ่งนี้ตามรอบที่เลือก</div>' : '') + '</div>';
+    var shopOk = cfg.PICKUP_SHOP !== false, w = waveNow(), ev = evCfg(), me = S.me.evening;
+    h += '<div class="box"><h3>รับของ</h3>';
+    if (m.sourceKind === 'sign') h += '<label class="chk"><input type="radio" name="mode" value="pickup" data-chg="mode"' + (c.mode === 'pickup' ? ' checked' : '') + '><span>รับที่จุดรับ รอบ ' + esc(cfg.CONDO_TIME) + ' (ไม่มีขั้นต่ำต่อคน)</span></label>';
+    h += '<label class="chk"><input type="radio" name="mode" value="deliver" data-chg="mode"' + (k.mode === 'deliver' ? ' checked' : '') + '><span>ส่งถึงที่ (ส่งฟรีขั้นต่ำ ' + baht(cfg.MIN_ORDER) + ')</span></label>';
+    if (shopOk) h += '<label class="chk"><input type="radio" name="mode" value="shop" data-chg="mode"' + (k.mode === 'shop' ? ' checked' : '') + '><span>รับเองที่ร้าน (ไม่มีขั้นต่ำ)</span></label>';
+    if (k.mode === 'pickup') { var r = S.ui.round; if (r) { var after = r.total + k.subtotal; h += '<div class="alert ' + (after >= r.min ? 'ok' : 'warn') + '" style="margin-top:6px">ยอดรวมจุดรับวันนี้ ' + baht(after) + ' / ' + baht(r.min) + (after >= r.min ? ' · รอบออกแน่นอน' : ' · ขาดอีก ' + baht(r.min - after) + ' ถ้าไม่ครบ เลื่อนเป็นรอบพรุ่งนี้') + ' · ของรอที่จุดรับได้ ' + r.hold + ' นาที</div>'; } }
+    else if (k.mode === 'shop') h += '<div class="hint">ร้านจะแจ้งในแชตเมื่อจัดของเสร็จ มารับได้ในเวลาทำการ</div>';
+    else if (autoSlot()) {
+      if (evOn()) { // เลือก รอบกลางวัน (ร้านจัดให้) / รอบเย็น 17:30–20:00 (โอนก่อน)
+        var evDate = me.tonight && me.tonightLeft > 0 ? me.tonight : me.next, evLeft = evDate === me.tonight ? me.tonightLeft : me.nextLeft;
+        if (c.evening && c.eveningDate && c.eveningDate !== me.tonight && c.eveningDate !== me.next) c.eveningDate = '';
+        var pick = c.evening && c.eveningDate ? c.eveningDate : evDate;
+        h += '<div class="slot-pick"><small class="hint">รอบส่ง</small><label class="chk"><input type="radio" name="when" value="day" data-chg="when"' + (c.evening ? '' : ' checked') + '><span><b>รอบกลางวัน</b> · ' + esc(w.slot) + ' ' + (w.date === todayStr() ? 'วันนี้' : 'พรุ่งนี้') + ' รถออกประมาณ ' + esc(w.depart) + '</span></label>' +
+          '<label class="chk"><input type="radio" name="when" value="evening" data-chg="when"' + (c.evening ? ' checked' : '') + '><span><b>รอบเย็น ' + esc(ev.depart) + '–' + esc(ev.end) + '</b> · ' + esc(evDayText(evDate)) + (evLeft <= 3 ? ' (เหลือ ' + evLeft + ' คิว)' : '') + '<br><small class="hint">โอนก่อน ' + esc(ev.cutoff) + ' น. · ขั้นต่ำ ' + baht(ev.min) + ' · เหมาะกับมื้อเย็นที่บ้าน</small></span></label></div>';
+        if (c.evening) {
+          h += (me.tonight && me.tonightLeft > 0 && me.next ? '<div class="field"><label for="evdate">คืนที่ต้องการ</label><select id="evdate" data-chg="evDate"><option value="' + me.tonight + '"' + (pick === me.tonight ? ' selected' : '') + '>คืนนี้ (โอนก่อน ' + esc(ev.cutoff) + ')</option><option value="' + me.next + '"' + (pick === me.next ? ' selected' : '') + '>' + esc(evDayText(me.next)) + '</option></select></div>' : '') +
+            '<div class="alert info">รอบเย็นต้องโอนตามยอดประมาณก่อน ' + esc(ev.cutoff) + ' น. ของวันส่ง · ยอดจริงต่างจากนี้ ร้านคืนเป็นเครดิตหรือแจ้งส่วนต่าง · ไม่ทันเวลา ระบบเลื่อนเป็นรอบเย็นคืนถัดไปให้</div>';
+        }
+      }
+      if (!c.evening) h += '<div class="wave-box"><div><small>รอบส่งที่คาด (ร้านจัดรอบให้)</small><b>' + esc(w.slot) + ' ' + (w.date === todayStr() ? 'วันนี้' : 'พรุ่งนี้') + ' · รถออกประมาณ ' + esc(w.depart) + '</b></div><small class="hint">สั่งก่อน ' + esc(waves()[0].cutoff) + ' น. ได้รอบเช้าวันถัดไป · ร้านจะแจ้งเวลาถึงโดยประมาณตอนรถออก</small></div>' +
+        '<div class="field"><label for="needby">ต้องได้ของก่อนกี่โมง (บอกร้านไว้ ไม่ใช่การจอง)</label>' + needBySelect(c.needBy, 'needby') + '</div>';
     }
+    else h += '<div class="field"><label for="slot">เลือกรอบจัดส่ง</label><select id="slot" data-chg="slot">' + slots.map(function (s) { return '<option' + (c.slot === s ? ' selected' : '') + '>' + esc(s) + '</option>'; }).join('') + '</select>' +
+      (cfg.ORDER_CUTOFF && nowHM() >= cfg.ORDER_CUTOFF ? '<div class="hint">สั่งหลัง ' + esc(cfg.ORDER_CUTOFF) + ' น. ร้านจะส่งให้พรุ่งนี้ตามรอบที่เลือก</div>' : '') + '</div>';
+    h += '</div>';
     if (k.belowMin) {
       var sug = S.cat.products.filter(function (p) { return p.promo && p.inStock; }).slice(0, 3);
-      h += '<div class="alert warn">ยอด ' + baht(k.subtotal) + ' ยังไม่ถึงขั้นต่ำส่งฟรี ' + baht(k.min) + ' สั่งได้ แต่จะส่งรวมรอบถัดไปที่ผ่านย่านของคุณ<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">' +
-        sug.map(function (p) { return '<button class="btn sm" data-a="qty" data-k="p" data-p="' + esc(p.sku) + '" data-d="1">+ ' + esc(p.name.replace(/\s*\(ตัวอย่าง\)/, '')) + '</button>'; }).join('') + '</div></div>';
-    } else if (k.mode !== 'pickup' && k.min < cfg.MIN_ORDER) h += '<div class="alert ok">สิทธิ์ลูกค้าใหม่ในโซนส่งประจำ: ขั้นต่ำส่งฟรีเหลือ ' + baht(k.min) + '</div>';
-    h += '</div><div class="foot"><div class="foot-inner"><div class="sum"><b class="num">' + baht(k.net) + '</b><small>ยอดประมาณ' + (k.belowMin ? ' · ส่งรวมรอบถัดไป' : '') + '</small></div><button class="btn pri" data-a="submitOrder"' + (k.errors.length ? ' disabled' : '') + '>ยืนยันส่งออเดอร์</button></div></div>';
+      h += '<div class="alert warn">' + (k.evening ? 'รอบเย็นสั่งขั้นต่ำ ' + baht(k.min) + ' (ตอนนี้ ' + baht(k.subtotal) + ') เพิ่มของอีกนิด หรือเลือกรอบกลางวัน' : k.tooSmall ? 'ยอด ' + baht(k.subtotal) + ' ต่ำกว่าขั้นต่ำสำหรับส่ง ' + baht(k.poolMin) + ' เพิ่มของอีกนิด หรือเลือก "รับเองที่ร้าน"' : 'ยอด ' + baht(k.subtotal) + ' ยังไม่ถึงขั้นต่ำส่งฟรี ' + baht(k.min) + ' สั่งได้แบบ <b>ส่งรวมรอบ</b>: ร้านจะส่งให้เมื่อมีรอบผ่านย่านของคุณ (วันนี้หรือพรุ่งนี้) · อยากได้ตามรอบแน่นอน เพิ่มของให้ถึง ' + baht(k.min)) + '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">' +
+        sug.map(function (p) { return '<button class="btn sm" data-a="qty" data-k="p" data-p="' + esc(p.sku) + '" data-d="1">+ ' + esc(p.name.replace(/\s*\(ตัวอย่าง\)/, '')) + '</button>'; }).join('') + (shopOk ? '<button class="btn sm" data-a="setMode" data-p="shop">รับเองที่ร้าน</button>' : '') + '</div></div>';
+    } else if (k.mode === 'deliver' && k.min < cfg.MIN_ORDER) h += '<div class="alert ok">สิทธิ์ลูกค้าใหม่ในโซนส่งประจำ: ขั้นต่ำส่งฟรีเหลือ ' + baht(k.min) + '</div>';
+    h += '</div><div class="foot"><div class="foot-inner"><div class="sum"><b class="num">' + baht(k.net) + '</b><small>ยอดประมาณ' + (k.evening ? ' · รอบเย็น โอนก่อน ' + esc(ev.cutoff) : k.pool ? ' · ส่งรวมรอบ' : k.mode === 'shop' ? ' · รับเองที่ร้าน' : '') + '</small></div><button class="btn pri" data-a="submitOrder"' + (k.errors.length || k.tooSmall ? ' disabled' : '') + '>' + (k.evening ? 'ยืนยัน แล้วไปจ่าย' : 'ยืนยันส่งออเดอร์') + '</button></div></div>';
     render(h);
     if (m.sourceKind === 'sign' && !S.ui.roundLoaded) { S.ui.roundLoaded = true; api('roundInfo', {}, { quiet: true }).then(function (r) { S.ui.round = r.round; if (S.page === 'cart') pageCart(); }).catch(function () { }); }
   }
@@ -643,9 +780,19 @@
     S.page = 'cart'; pageCart();
   }
   function pageDone() {
-    var tmr = S.params.dd && S.params.dd > todayStr();
-    render(top('ส่งออเดอร์แล้ว', '', false) + '<div class="wrap"><section class="box success-panel"><span class="success-icon">' + icon('check') + '</span><h2>ร้านได้รับออเดอร์แล้วค่ะ</h2><p>ออเดอร์ <b class="mono">' + esc(S.params.id) + '</b></p>' +
-      (tmr ? '<p class="alert info">จัดส่งวัน' + dayName(S.params.dd) + 'ที่ ' + thDate(S.params.dd) + '</p>' : '') +
+    var pr = S.params, tmr = pr.dd && pr.dd > todayStr(), line = '', ev = evCfg();
+    if (pr.evening === '1') {
+      return render(top('ส่งออเดอร์แล้ว', '', false) + '<div class="wrap"><section class="box success-panel"><span class="success-icon">' + icon('clock') + '</span><h2>รอบเย็น' + esc(evDayText(pr.dd)) + '</h2><p>ออเดอร์ <b class="mono">' + esc(pr.id) + '</b> · ส่ง ' + esc(ev ? ev.depart + '–' + ev.end : '') + ' น.</p>' +
+        (pr.payBy ? '<p class="alert warn">โอนตามยอดประมาณก่อน <b>' + esc(pr.payBy.slice(11, 16)) + ' น.' + (pr.payBy.slice(0, 10) === todayStr() ? ' วันนี้' : ' ' + esc(thDate(pr.payBy))) + '</b> เพื่อยืนยันคิว</p>' : '') + '</section>' +
+        '<button class="btn pri block" data-a="go" data-p="bill" data-id="' + esc(pr.id) + '">' + icon('bill') + ' จ่ายเลย · สแกน QR</button><button class="btn block" data-a="closeApp">กลับไปที่แชต LINE</button></div>');
+    }
+    if (pr.mode === 'shop') line = 'รับเองที่ร้าน · ร้านจะแจ้งในแชตเมื่อจัดของเสร็จ';
+    else if (pr.mode === 'pickup') line = 'รับที่จุดรับ รอบ ' + esc(S.cat.cfg.CONDO_TIME);
+    else if (pr.pool === '1') line = 'ส่งรวมรอบ: ร้านจะส่งเมื่อมีรอบผ่านย่านของคุณ (วันนี้หรือพรุ่งนี้) และแจ้งเวลาในแชต';
+    else if (pr.slot) line = (tmr ? 'จัดส่งวัน' + dayName(pr.dd) + 'ที่ ' + thDate(pr.dd) + ' ' : 'จัดส่งวันนี้ ') + esc(pr.slot) + (pr.depart ? ' (รถออกประมาณ ' + esc(pr.depart) + ')' : '');
+    else if (tmr) line = 'จัดส่งวัน' + dayName(pr.dd) + 'ที่ ' + thDate(pr.dd);
+    render(top('ส่งออเดอร์แล้ว', '', false) + '<div class="wrap"><section class="box success-panel"><span class="success-icon">' + icon('check') + '</span><h2>ร้านได้รับออเดอร์แล้วค่ะ</h2><p>ออเดอร์ <b class="mono">' + esc(pr.id) + '</b></p>' +
+      (line ? '<p class="alert info">' + line + '</p>' : '') +
       '<p class="hint">ร้านจะตรวจรายการและชั่งสินค้า<br>แล้วส่งบิลยอดจริงเข้าแชต LINE OA</p></section>' + orderProgress('new') + '<button class="btn pri block" data-a="go" data-p="bills">ติดตามบิลของฉัน</button><button class="btn block" data-a="closeApp">กลับไปที่แชต LINE</button></div>');
   }
 
@@ -658,18 +805,18 @@
       var h = top('บิลของฉัน', 'ติดตามออเดอร์และการชำระเงิน', true) + '<div class="wrap">' + (due.length ? '<div class="alert warn">มี ' + due.length + ' บิลรอชำระ รวม ' + baht(due.reduce(function (s, o) { return s + o.pay.remain; }, 0)) + ' · แตะบิลเพื่อสแกน QR และแนบสลิป</div>' : '');
       h += r.orders.length ? r.orders.map(function (o) {
         var amt = o.status === 'billed' ? o.pay.remain : (o.actual || o.est);
-        return '<button class="box bill-card" data-a="go" data-p="bill" data-id="' + esc(o.id) + '"><div class="bill-card-head"><b class="mono">' + esc(o.id) + '</b>' + statusPill(o.status) + '</div><div class="hint">' + esc(o.created) + (o.txn ? ' · ' + esc(o.txn) : '') + (o.delivery === 'out' ? ' · <b>กำลังนำส่ง</b>' : '') + '</div>' + (o.status === 'billed' ? payPill(o.pay) : '') +
+        return '<button class="box bill-card" data-a="go" data-p="bill" data-id="' + esc(o.id) + '"><div class="bill-card-head"><b class="mono">' + esc(o.id) + '</b>' + statusPill(o.status) + '</div><div class="hint">' + esc(o.created) + (o.txn ? ' · ' + esc(o.txn) : '') + (o.delivery === 'out' ? ' · <b>กำลังนำส่ง</b>' : '') + (o.evening ? ' · รอบเย็น' + esc(evDayText(o.deliverDate)) : '') + '</div>' + (o.status === 'billed' ? payPill(o.pay) : '') + (o.evening && o.payBy && /new|approved/.test(o.status) && o.pay.remain > 0 ? '<span class="pill new">โอนก่อน ' + esc(o.payBy.slice(11, 16)) + ' น.</span>' : '') +
           '<div class="bill-card-foot"><div><small>' + (o.status === 'billed' ? (o.pay.status === 'review' ? 'แจ้งโอนแล้ว รอร้านตรวจ' : 'ยอดที่ต้องโอน') : o.txn ? 'ยอดตามบิล' : 'ยอดประมาณ') + '</small><strong class="price">' + baht(o.status === 'billed' && o.pay.status === 'review' ? o.pay.received : amt) + '</strong></div><span class="bill-link">' + (o.status === 'billed' && o.pay.remain > 0 ? 'ชำระเงิน' : 'ดูรายละเอียด') + ' →</span></div></button>';
       }).join('') : '<div class="empty">' + icon('bill') + '<b>ยังไม่มีออเดอร์</b><span>เมื่อสั่งสินค้าแล้ว ติดตามบิลได้ที่นี่</span></div><button class="btn pri block" data-a="go" data-p="catalog">เริ่มเลือกสินค้า</button>';
       render(h + '</div>');
     });
   }
   function payRows(o) {
-    var p = o.pay, h = '<section class="box pay-ledger"><h3>การชำระเงิน</h3><div class="row"><span>ยอดตามบิล</span><span class="num">' + baht(p.bill) + '</span></div>';
+    var p = o.pay, h = '<section class="box pay-ledger"><h3>การชำระเงิน</h3><div class="row"><span>' + (o.txn ? 'ยอดตามบิล' : 'ยอดประมาณ (จ่ายก่อน)') + '</span><span class="num">' + baht(p.bill) + '</span></div>';
     if (p.credit > 0) h += '<div class="row disc"><span>หักเครดิต (โอนเกินครั้งก่อน)</span><span class="num">−' + baht(p.credit) + '</span></div>';
     if (p.confirmed > 0) h += '<div class="row disc"><span>ร้านยืนยันรับแล้ว</span><span class="num">−' + baht(p.confirmed) + '</span></div>';
     if (p.pending > 0) h += '<div class="row"><span>แจ้งโอนแล้ว รอร้านตรวจ</span><span class="num">−' + baht(p.pending) + '</span></div>';
-    if (o.status === 'billed') h += '<div class="row tot"><span>' + (p.remain > 0 ? 'ยังต้องโอนอีก' : 'ยอดครบแล้ว') + '</span><strong class="price num">' + baht(p.remain) + '</strong></div>';
+    if (o.status === 'billed' || (o.evening && /new|approved/.test(o.status))) h += '<div class="row tot"><span>' + (p.remain > 0 ? 'ยังต้องโอนอีก' : 'ยอดครบแล้ว') + '</span><strong class="price num">' + baht(p.remain) + '</strong></div>';
     if (p.over > 0) h += '<div class="alert ok">โอนเกิน ' + baht(p.over) + ' ' + (S.cat.cfg.OVERPAY_MODE === 'refund' ? 'ร้านจะติดต่อคืนเงิน' : 'เก็บเป็นเครดิต หักบิลถัดไปให้อัตโนมัติ') + '</div>';
     if ((p.payments || []).length) h += '<details class="pay-history"' + (p.payments.some(function (x) { return x.status === 'rejected'; }) ? ' open' : '') + '><summary>ประวัติการแจ้งโอน (' + p.payments.length + ')</summary>' + p.payments.map(function (x) {
       var st = x.status === 'confirmed' ? '<span class="pill paid">ยืนยันแล้ว</span>' : x.status === 'rejected' ? '<span class="pill red">ร้านตรวจไม่พบยอด</span>' : '<span class="pill appr">รอตรวจ</span>';
@@ -681,18 +828,19 @@
     var id = S.params.id;
     if (!id) return go('bills', {}, true);
     loadPage('bill:' + id, 'order', { id: id }, function (r) {
-      var o = r.order, p = o.pay, cfg = S.cat.cfg;
+      var o = r.order, p = o.pay, cfg = S.cat.cfg, pre = o.evening && o.payBy && /new|approved/.test(o.status);
       var h = top('บิล ' + o.id, o.created, true) + '<div class="wrap">' + orderProgress(o.status, o.delivery);
+      if (o.evening) h += '<div class="alert ' + (pre && p.remain > 0 ? 'warn' : 'info') + '">รอบเย็น' + esc(evDayText(o.deliverDate)) + (evCfg() ? ' ส่ง ' + esc(evCfg().depart + '–' + evCfg().end) + ' น.' : '') + (pre && p.remain > 0 ? ' · <b>โอนก่อน ' + esc(o.payBy.slice(11, 16)) + ' น.' + (o.payBy.slice(0, 10) === todayStr() ? ' วันนี้' : ' ' + esc(thDate(o.payBy))) + '</b> ตามยอดประมาณ · ยอดจริงต่าง ร้านคืนเป็นเครดิตหรือแจ้งส่วนต่าง' : '') + (o.eveningMoved ? ' · เลื่อนมาแล้ว ' + o.eveningMoved + ' ครั้ง' : '') + '</div>';
       if (o.delivery === 'out') h += '<button class="btn pri block" data-a="received" data-id="' + esc(o.id) + '">' + icon('check') + ' ได้รับของแล้ว</button>';
       h += '<div class="box">' + o.bundles.map(function (l) { return '<div class="row"><span>' + esc(l.name) + ' ×' + l.qty + '</span><span>' + baht(l.price * l.qty) + '</span></div>'; }).join('') +
         o.items.map(function (l) { return '<div class="row"><span>' + esc(l.name) + ' ×' + l.qty + ' @' + fmt(l.price) + '</span><span>' + baht(l.price * l.qty) + '</span></div>'; }).join('') +
-        (o.coupon ? '<div class="row disc"><span>คูปอง</span><span>−' + baht(o.coupon) + '</span></div>' : '') + (o.coinUse ? '<div class="row disc"><span>Coin ' + fmt(o.coinUse) + '</span><span>−' + baht(o.coinUse * cfg.COIN_VALUE) + '</span></div>' : '') +
+        (o.coupon ? '<div class="row disc"><span>ส่วนลดลูกค้าใหม่' + (o.couponStep ? ' บิลที่ ' + o.couponStep : '') + '</span><span>−' + baht(o.coupon) + '</span></div>' : '') + (o.coinUse ? '<div class="row disc"><span>ส่วนลดสะสม</span><span>−' + baht(o.coinUse * cfg.COIN_VALUE) + '</span></div>' : '') +
         '<div class="row"><span>ยอดประมาณ</span><span>' + baht(o.est) + '</span></div>' + (o.txn ? '<div class="row"><span>Transaction No.</span><span class="mono">' + esc(o.txn) + '</span></div><div class="row tot"><span>ยอดตามบิล (หลังชั่ง)</span><span>' + baht(o.actual) + '</span></div>' : '') +
-        (o.mode === 'pickup' ? '<div class="hint">รับที่จุด ' + esc(o.pickup) + ' รอบ ' + esc(cfg.CONDO_TIME) + '</div>' : '<div class="hint">รอบส่ง: ' + esc(o.slot) + (o.deliverDate && o.deliverDate !== o.date ? ' · ' + thDate(o.deliverDate) : '') + '</div>') + '</div>';
-      if (o.status === 'new' || o.status === 'approved') h += '<div class="alert info">ร้านยังไม่เปิดบิล ยอดจริงจะส่งเข้าแชตหลังชั่งของ</div>';
-      if (o.status === 'billed' || o.status === 'paid') h += payRows(o);
+        (o.mode === 'pickup' ? '<div class="hint">รับที่จุด ' + esc(o.pickup) + ' รอบ ' + esc(cfg.CONDO_TIME) + '</div>' : o.mode === 'shop' ? '<div class="hint">รับเองที่ร้าน</div>' : '<div class="hint">รอบส่ง: ' + esc(o.slot) + (o.deliverDate && o.deliverDate !== o.date ? ' · ' + thDate(o.deliverDate) : '') + (o.eta && o.delivery === 'out' ? ' · ถึงประมาณ ' + esc(o.eta) + ' น.' : '') + (o.needBy ? ' · ต้องได้ก่อน ' + esc(o.needBy) : '') + (o.pool && !o.delivery ? ' · <b>ส่งรวมรอบ</b> (รอรอบผ่านย่านของคุณ)' : '') + '</div>') + '</div>';
+      if ((o.status === 'new' || o.status === 'approved') && !pre) h += '<div class="alert info">ร้านยังไม่เปิดบิล ยอดจริงจะส่งเข้าแชตหลังชั่งของ</div>';
+      if (o.status === 'billed' || o.status === 'paid' || (pre && (p.received > 0 || p.remain > 0))) h += payRows(o);
       if (o.status === 'paid') h += '<div class="alert ok">ชำระครบแล้ว ' + esc(o.paidAt) + ' ขอบคุณค่ะ</div>';
-      if (o.status === 'billed' && p.remain > 0) {
+      if ((o.status === 'billed' || pre) && p.remain > 0) {
         if (o.promptpay) h += '<div class="box qr"><div class="code">' + qrSvg(o.promptpay.payload) + '</div><b>สแกนจ่าย PromptPay · ' + baht(o.promptpay.amount) + '</b>' + (o.promptpay.demo ? '<div class="alert warn">QR ตัวอย่าง (ร้านยังไม่ได้ตั้งบัญชีรับเงิน)</div>' : '<div class="hint">ใส่ยอดไว้แล้ว · บันทึกภาพหน้าจอแล้วสแกนในแอปธนาคารได้</div>') + '</div>';
         var auto = cfg.SLIP_VERIFY && cfg.SLIP_VERIFY !== 'off', sl = S.ui.slip && S.ui.slip.id === o.id ? S.ui.slip : null;
         h += '<form class="box form" data-form="notifyPaid" data-id="' + esc(o.id) + '"><h3>แจ้งโอนแล้ว</h3>' +
@@ -701,7 +849,7 @@
           '<label class="btn sm"><input type="file" accept="image/*" data-chg="slip" data-id="' + esc(o.id) + '" hidden>' + icon('camera') + (sl ? ' เปลี่ยนรูป' : ' เลือกรูปสลิป') + '</label></div></div>' +
           (auto && sl && sl.qr && !sl.manual ? '<input type="hidden" name="amount" value="">' : '<div class="field"><label for="pd-amt">ยอดที่โอน (บาท)</label><input id="pd-amt" name="amount" inputmode="decimal" value="' + p.remain + '"><small class="hint">ถ้าโอนไม่เท่ายอดนี้ แก้ตัวเลขได้ ระบบจะรวมทุกครั้งที่แจ้งโอนให้</small></div>') +
           '<button class="btn pri block" type="submit"' + (sl && sl.reading ? ' disabled' : '') + '>แจ้งโอนแล้ว</button></form>';
-      } else if (o.status === 'billed' && p.pending > 0) h += '<div class="alert info">ได้รับแจ้งโอนครบแล้ว ร้านกำลังตรวจยอด จะแจ้งในแชตเมื่อยืนยัน</div>';
+      } else if ((o.status === 'billed' || pre) && p.pending > 0) h += '<div class="alert info">ได้รับแจ้งโอนครบแล้ว ร้านกำลังตรวจยอด จะแจ้งในแชตเมื่อยืนยัน</div>';
       render(h + '</div>');
     });
   }
@@ -715,10 +863,13 @@
       h += '<div class="box qr">' + (full ? '<div class="alert warn">เดือนนี้ชวนครบ ' + r.limit + ' ร้านแล้ว</div>' : (r.link ? '<div class="code">' + qrSvg(r.link) + '</div>' : '<div class="alert warn">ร้านยังไม่ได้ตั้งค่าลิงก์ชวน</div>')) +
         '<b>QR ชวนเพื่อนของคุณ</b>' + (r.link ? '<div class="copy"><input readonly value="' + esc(r.link) + '" aria-label="ลิงก์ชวน"><button class="btn sm" data-a="copy" data-t="' + esc(r.link) + '">คัดลอก</button></div>' : '') +
         (r.link && canShare() ? '<button class="btn sm pri" data-a="share" data-t="' + esc(r.link) + '">ส่งให้เพื่อนใน LINE</button>' : '') + '</div>';
-      h += '<div class="box"><h3>กติกา</h3><div class="row"><span>เพื่อนได้</span><span style="text-align:right">ลด ' + cfg.COUPON_PCT + '% สินค้าร่วมโปร/เซ็ต · ' + cfg.COUPON_BILLS + ' บิลแรกใน ' + cfg.COUPON_DAYS + ' วัน · สูงสุด ' + baht(cfg.COUPON_CAP) + '/บิล</span></div>' +
-        '<div class="row"><span>คุณได้</span><span style="text-align:right">' + cfg.COIN_PCT + '% ของยอดบิลเพื่อนเป็น Coin นาน ' + cfg.COIN_MONTHS + ' เดือน · สูงสุด ' + fmt(cfg.COIN_CAP) + ' Coin/เดือน</span></div>' +
-        '<div class="hint">นับเฉพาะร้านที่ไม่เคยซื้อมาก่อน และต้องลงทะเบียนผ่าน QR นี้ก่อนบิลแรก</div></div>';
-      h += '<div class="kv"><div><small>Coin ใช้ได้</small><b>' + fmt(r.bal) + '</b></div><div><small>รออนุมัติ</small><b>' + fmt(r.pending) + '</b></div><div><small>ชวนเดือนนี้</small><b>' + r.monthCount + '/' + r.limit + '</b></div></div>';
+      var pC = couponPlan(cfg, 'Consumer'), pF = couponPlan(cfg, 'FS'), oF = offerFor('welcome', 'FS', 'ref'), oC = offerFor('welcome', 'Consumer', 'ref'), rF = offerFor('referrer', 'FS'), rC = offerFor('referrer', 'Consumer');
+      function ladder(p) { return p.pcts[0] > 0 ? p.pcts.map(function (x, i) { return 'บิลที่ ' + (i + 1) + ' ลด ' + x + '%'; }).join(' · ') + ' (สินค้าร่วมรายการ ภายใน ' + p.days + ' วัน)' : 'ตามที่ร้านประกาศ'; }
+      var mine = (cfg.OFFERS || []).length ? (rF ? 'เพื่อนร้านอาหาร: ' + rewardText(rF) : '') + (rF && rC ? ' · ' : '') + (rC ? 'เพื่อนลูกค้าบ้าน: ' + rewardText(rC) : '') : rewardText(null);
+      h += '<div class="box"><h3>กติกา</h3><div class="row"><span>เพื่อนที่เป็นร้านอาหาร</span><span style="text-align:right">' + esc(oF ? offerText(oF) + ' · ภายใน ' + oF.days + ' วัน' : ladder(pF)) + '</span></div><div class="row"><span>เพื่อนที่เป็นลูกค้าบ้าน</span><span style="text-align:right">' + esc(oC ? offerText(oC) + ' · ภายใน ' + oC.days + ' วัน' : ladder(pC)) + '</span></div>' +
+        '<div class="row"><span>คุณได้</span><span style="text-align:right">' + esc(mine || rewardText(null)) + ' · สูงสุด ' + baht(cfg.COIN_CAP) + '/เดือน · เป็นส่วนลดสะสมใช้ลดบิลถัดไปของคุณ (ร้านอนุมัติหลังเพื่อนชำระเงิน)</span></div>' +
+        '<div class="hint">นับเฉพาะคนที่ไม่เคยซื้อมาก่อน และต้องลงทะเบียนผ่าน QR นี้ก่อนบิลแรก</div></div>';
+      h += '<div class="kv"><div><small>ส่วนลดใช้ได้</small><b>' + baht(r.bal) + '</b></div><div><small>รออนุมัติ</small><b>' + baht(r.pending) + '</b></div><div><small>ชวนเดือนนี้</small><b>' + r.monthCount + '/' + r.limit + '</b></div></div>';
       h += '<div class="box"><h3>เพื่อนที่ชวน</h3>' + (r.refs.length ? r.refs.map(function (x) { return '<div class="row"><span>' + esc(x.name) + '</span><span>' + (x.approved ? '<span class="pill paid">สมาชิกแล้ว</span>' : x.flagged ? '<span class="pill red">ร้านกำลังตรวจ</span>' : '<span class="pill new">รอร้านตรวจ</span>') + '</span></div>'; }).join('') : '<div class="hint">ยังไม่มี</div>') + '</div>';
       render(h + '</div>');
     });
@@ -727,11 +878,12 @@
   function pageWallet() {
     loadPage('wallet', 'wallet', {}, function (r) {
       var m = r.member || S.me.member, cfg = S.cat.cfg;
-      var h = top('Coin & คูปอง', '', true) + '<div class="wrap"><div class="kv"><div><small>Coin ใช้ได้</small><b>' + fmt(r.bal) + '</b></div><div><small>รออนุมัติ</small><b>' + fmt(r.pending) + '</b></div><div><small>เครดิตเงิน</small><b>' + baht(r.credit || 0) + '</b></div></div>';
-      if (r.soon && r.soonDate) h += '<div class="alert warn">Coin ' + fmt(r.soon) + ' จะหมดอายุ ' + esc(thDate(r.soonDate)) + ' ใช้ก่อนนะคะ</div>';
-      if (m && m.couponLeft > 0) h += '<div class="box"><h3>คูปองลูกค้าใหม่</h3><div class="row"><span>ส่วนลด</span><span>' + cfg.COUPON_PCT + '% สินค้าร่วมโปร/เซ็ต</span></div><div class="row"><span>เหลือ</span><span>' + m.couponLeft + ' บิล</span></div><div class="row"><span>หมดอายุ</span><span>' + esc(thDate(m.couponExpires)) + '</span></div></div>';
+      var h = top('ส่วนลดของฉัน', 'ส่วนลดสะสม · คูปอง · เครดิต', true) + '<div class="wrap"><div class="kv"><div><small>ส่วนลดสะสมใช้ได้</small><b>' + baht(r.bal) + '</b></div><div><small>รออนุมัติ</small><b>' + baht(r.pending) + '</b></div><div><small>เครดิตเงิน</small><b>' + baht(r.credit || 0) + '</b></div></div>';
+      if (r.soon && r.soonDate) h += '<div class="alert warn">ส่วนลดสะสม ' + baht(r.soon) + ' จะหมดอายุ ' + esc(thDate(r.soonDate)) + ' ใช้ก่อนนะคะ</div>';
+      h += couponStrip(S.me.coupon) + '<div class="hint">ส่วนลดสะสมได้จากการชวนเพื่อน ใช้ลดสินค้าร่วมรายการและเซ็ตคุ้มในบิลถัดไป (1 หน่วย = 1 บาท) · แต้มสมาชิกบริษัทยังสะสมที่หน้าร้านตามปกติ</div>';
+
       if ((r.credits || []).length) h += '<div class="box"><h3>เครดิตเงิน</h3><div class="hint">ได้จากการโอนเกิน ระบบหักให้อัตโนมัติในบิลถัดไป</div>' + r.credits.map(function (c) { return '<div class="row"><span>' + esc({ overpay: 'โอนเกิน', use: 'หักในบิล', refund: 'ร้านคืนเงิน', restore: 'คืนเครดิต' }[c.kind] || c.kind) + ' ' + esc(c.order) + '<br><small class="hint">' + esc(thDate(c.at)) + '</small></span><span class="num">' + (c.amount > 0 ? '+' : '−') + baht(Math.abs(c.amount)) + '</span></div>'; }).join('') + '</div>';
-      h += '<div class="box"><h3>ประวัติ Coin</h3>' + (r.coins.length ? r.coins.map(function (c) {
+      h += '<div class="box"><h3>ประวัติส่วนลดสะสม</h3>' + (r.coins.length ? r.coins.map(function (c) {
         var label = c.status === 'used' ? 'ใช้กับ ' + c.order : c.status === 'cancelled' ? 'ยกเลิก (' + c.order + ')' : 'จากบิล ' + c.order + (c.from ? ' ของ ' + c.from : '');
         var sub = c.status === 'pending' ? 'รอร้านอนุมัติ' : c.status === 'available' ? 'หมดอายุ ' + thDate(c.expires) : thDate(c.earned);
         return '<div class="row"><span>' + esc(label) + '<br><small class="hint">' + esc(sub) + '</small></span><span class="num">' + (c.status === 'used' ? '−' : '+') + fmt(c.amount) + '</span></div>';
@@ -774,16 +926,40 @@
   function pageCard() {
     var m = S.me.member, cfg = S.cat.cfg;
     var h = top('บัตรสมาชิก', m.sno ? 'สมาชิก ' + m.sno : 'รอร้านยืนยันเลขสมาชิก', true) + '<div class="wrap"><div class="box qr"><div class="code">' + qrSvg(m.sno || m.id) + '</div><b>' + esc(m.name) + '</b><span class="mono">' + esc(m.sno || 'รอเลขสมาชิก') + '</span></div>' +
-      '<div class="alert ' + (cfg.COUNT_COUNTER ? 'ok' : 'info') + '">' + (cfg.COUNT_COUNTER ? 'แสดงบัตรนี้ที่แคชเชียร์ทุกครั้งที่ซื้อหน้าร้าน' : 'Coin และสิทธิ์นับจากออเดอร์ที่สั่งผ่าน LINE') + '</div>';
-    h += '<div class="tiles member-shortcuts">' + menuTile('wallet', 'Coin & คูปอง', 'ดูส่วนลดของฉัน', 'wallet') + menuTile('standing', 'สั่งประจำ', 'จัดการตะกร้าประจำ', 'clock') + menuTile('bills', 'บิลของฉัน', 'ดูประวัติออเดอร์', 'bill') + '</div>';
-    if (m.sourceKind !== 'sign') {
-      if (S.ui.geo === undefined && m.lat) S.ui.geo = { lat: m.lat, lng: m.lng, saved: true };
-      h += '<form class="box form" data-form="profileSave"><h3>' + icon('truck') + ' ข้อมูลจัดส่ง</h3><div class="field"><label for="pf-zone">ย่านที่ให้ส่ง</label>' + zoneSelect('zone', m.zone, 'pf-zone') + '</div>' +
-        '<div class="field"><label for="pf-addr">ที่อยู่ / จุดสังเกต</label><textarea id="pf-addr" name="address" rows="2" maxlength="200">' + esc(m.address) + '</textarea></div>' + geoBox() +
-        '<button class="btn block" type="submit">บันทึกข้อมูลจัดส่ง</button></form>';
-    }
+      '<div class="alert ' + (cfg.COUNT_COUNTER ? 'ok' : 'info') + '">' + (cfg.COUNT_COUNTER ? 'แสดงบัตรนี้ที่แคชเชียร์ทุกครั้งที่ซื้อหน้าร้าน' : 'ส่วนลดสะสมและสิทธิ์นับจากออเดอร์ที่สั่งผ่าน LINE') + '</div>';
+    h += '<div class="tiles member-shortcuts">' + menuTile('wallet', 'ส่วนลดของฉัน', 'ส่วนลดสะสม · คูปอง', 'wallet') + menuTile('standing', 'สั่งประจำ', 'จัดการตะกร้าประจำ', 'clock') + menuTile('bills', 'บิลของฉัน', 'ดูประวัติออเดอร์', 'bill') + '</div>';
+    if (S.ui.geo === undefined && m.lat) S.ui.geo = { lat: m.lat, lng: m.lng, saved: true };
+    h += '<form class="box form" data-form="profileSave"><h3>' + icon('truck') + ' ข้อมูลจัดส่ง</h3>' +
+      (m.sourceKind !== 'sign' ? '<div class="field"><label for="pf-zone">ย่านที่ให้ส่ง</label>' + zoneSelect('zone', m.zone, 'pf-zone') + '</div>' : '') +
+      '<div class="field"><label for="pf-addr">ที่อยู่ / จุดสังเกต</label><textarea id="pf-addr" name="address" rows="2" maxlength="200">' + esc(m.address) + '</textarea></div>' +
+      '<div class="field"><label for="pf-note">จุดจอดรถ / คนรับของ / ช่วงเวลาที่รับได้</label><input id="pf-note" name="deliveryNote" maxlength="120" value="' + esc(m.deliveryNote || '') + '" placeholder="เช่น จอดหน้าซอย โทรหาพี่แดง รับได้ 07–11 น."></div>' +
+      '<div class="field"><label for="pf-needby">ปกติต้องได้ของก่อนกี่โมง</label>' + needBySelect(m.needBy || '', 'pf-needby').replace('data-chg="needBy"', 'name="needBy"') + '</div>' +
+      (m.type !== 'Consumer' ? tradeSelect(m.trade || '', 'pf-trade', 'trade') : '') +
+      (m.sourceKind !== 'sign' ? geoBox() : '') + '<button class="btn block" type="submit">บันทึกข้อมูลจัดส่ง</button></form>';
+    var sh = S.me.shared || {};
+    if (sh.owner) {
+      var iv = S.ui.memberInvite;
+      h += '<div class="box"><h3>' + icon('invite') + ' LINE ของคนในร้าน</h3><div class="hint">ให้สามี/ภรรยา/ลูกน้องสั่งของจาก LINE ของเขาเอง โดยใช้เลขสมาชิก ส่วนลด และประวัติเดียวกัน บิลจะส่งไปที่คนสั่ง · เพิ่มได้สูงสุด 5 บัญชี</div>' +
+        (sh.links || []).map(function (l) { return '<div class="row"><span>' + esc(l.name) + ' <small class="hint">' + (l.status === 'active' ? 'ใช้งานอยู่' : 'รอกดยืนยัน (ถึง ' + esc((l.expires || '').slice(0, 16)) + ')') + '</small></span><span>' + (l.status === 'open' && l.link ? '<button class="btn sm" data-a="copy" data-t="' + esc(l.link) + '">คัดลอกลิงก์</button> ' : '') + '<button class="btn sm bad" data-a="memberLinkRemove" data-code="' + esc(l.code) + '">ถอด</button></span></div>'; }).join('') +
+        '<form class="form" data-form="memberInvite" style="margin-top:8px"><div class="acts"><div class="field"><label for="mi-name">ชื่อเรียก</label><input id="mi-name" name="name" maxlength="40" placeholder="เช่น พี่แดง"></div><button class="btn sm pri" type="submit">สร้างลิงก์เชิญ</button></div></form>' +
+        (iv ? '<div class="invite-out"><div class="code">' + qrSvg(iv.link) + '</div><div><b>ส่งลิงก์นี้ให้เขาเปิดใน LINE</b><small class="hint">ใช้ได้ครั้งเดียว ภายใน 3 วัน</small><div class="copy"><input readonly value="' + esc(iv.link) + '"><button class="btn sm" type="button" data-a="copy" data-t="' + esc(iv.link) + '">คัดลอก</button></div>' + (canShare() ? '<button class="btn sm pri" type="button" data-a="share" data-t="' + esc(iv.link) + '" data-msg="' + esc('ใช้บัญชีร้านใน LINE ร่วมกัน กดลิงก์นี้แล้วกดยืนยัน: ' + iv.link) + '">ส่งใน LINE</button>' : '') + '</div></div>' : '') + '</div>';
+    } else if (sh.owner === false) h += '<div class="box"><h3>บัญชีร่วม</h3><div class="hint">LINE นี้ใช้บัญชีร้านร่วมกับ ' + esc(sh.ownerName || 'เจ้าของร้าน') + ' ในชื่อ "' + esc(sh.me || '') + '" บิลที่คุณสั่งจะส่งมาที่แชตนี้</div></div>';
+    h += '<div class="box"><h3>ข้อมูลส่วนบุคคลของฉัน</h3><div class="hint">ร้านเก็บชื่อ เบอร์ และที่อยู่เพื่อจัดส่งและแจ้งบิลเท่านั้น · ขอแก้ไขได้ที่ "ข้อมูลจัดส่ง" ด้านบน · ขอลบข้อมูลได้ที่ปุ่มด้านล่าง (ประวัติการซื้อขายเก็บตามกฎหมายบัญชี แต่ไม่มีชื่อ/เบอร์) · <a href="privacy.html" target="_blank" rel="noopener">นโยบายข้อมูลส่วนบุคคล</a></div>' +
+      (m.privacyAt ? '<div class="alert info" style="margin-top:8px">ส่งคำขอลบข้อมูลแล้วเมื่อ ' + esc(thDate(m.privacyAt)) + ' ' + esc(m.privacyAt.slice(11, 16)) + ' ร้านจะดำเนินการและแจ้งใน ' + esc(cfg.PRIVACY_CONTACT || 'แชต') + '</div>' : '<button class="btn block" data-a="privacyRequest" style="margin-top:8px">ขอลบข้อมูลของฉัน</button>') + '</div>';
     if (isStaff() && cfg.TEST_MODE) h += '<div class="box test-box"><h3>เครื่องมือทดสอบ (เห็นเฉพาะพนักงาน)</h3><div class="hint">ลบข้อมูลสมาชิกของบัญชี LINE นี้ เพื่อทดลองลงทะเบียนใหม่ เช่น ลองเป็นลูกค้าที่ถูกชวน</div><button class="btn bad block" data-a="resetMe" style="margin-top:8px">ลบข้อมูลสมาชิกของฉัน</button></div>';
     render(h + staffLinks() + '</div>');
+  }
+
+  /* ---------- เข้าใช้บัญชีร้านร่วมกัน (LINE ที่ 2, 3 ของร้านเดียวกัน) ---------- */
+  function pageJoin() {
+    var code = S.params.code || '';
+    if (!code) return pageHome();
+    if (S.me.member) return render(top('ใช้บัญชีร่วมกัน', '', false) + '<div class="wrap"><div class="alert info">LINE นี้เป็นสมาชิกอยู่แล้ว (' + esc(S.me.member.name) + ') จึงเข้าร่วมบัญชีอื่นไม่ได้</div><button class="btn block" data-a="home">กลับหน้าแรก</button></div>');
+    var info = S.data['join:' + code];
+    if (!info) { render(top('ใช้บัญชีร่วมกัน', '', false) + '<div class="wrap"><div class="empty">กำลังโหลด...</div></div>'); return api('memberLinkInfo', { code: code }).then(function (r) { S.data['join:' + code] = r; if (S.page === 'join') pageJoin(); }).catch(fail); }
+    if (!info.valid) return render(top('ใช้บัญชีร่วมกัน', '', false) + '<div class="wrap"><div class="alert bad">' + esc(info.reason) + '</div><button class="btn block" data-a="home">กลับหน้าแรก</button></div>');
+    render(top('ใช้บัญชีร่วมกัน', '', false) + '<div class="wrap"><section class="box success-panel"><span class="success-icon">' + icon('invite') + '</span><h2>เข้าใช้บัญชีของ<br>' + esc(info.memberName) + '</h2><p>ในชื่อ "' + esc(info.name) + '"</p><p class="hint">สั่งของ ดูบิล และใช้ส่วนลดของร้านได้จาก LINE นี้ บิลที่คุณสั่งจะส่งมาที่แชตนี้</p></section>' +
+      '<form class="box form" data-form="joinConfirm"><label class="chk"><input type="checkbox" name="consent" required><span>ยินยอมตาม <a href="privacy.html" target="_blank" rel="noopener">นโยบายข้อมูลส่วนบุคคล</a></span></label><button class="btn pri block" type="submit">ยืนยันเข้าร่วม</button></form></div>');
   }
 
   /* ---------- พาร์ทเนอร์ ---------- */
@@ -794,7 +970,7 @@
     loadPage('partner', 'partnerDash', {}, function (r) {
       var d = r.dash;
       render(top(d.name, 'พาร์ทเนอร์ ' + d.id, true) + '<div class="wrap"><div class="kv"><div><small>สแกน</small><b>' + fmt(d.scans) + '</b></div><div><small>ลูกค้าจากป้าย</small><b>' + fmt(d.members) + '</b></div><div><small>ออเดอร์เดือนนี้</small><b>' + fmt(d.orders) + '</b></div></div>' +
-        '<div class="box"><div class="row"><span>ยอดขายจากป้ายเดือนนี้</span><span>' + baht(d.sales) + '</span></div><div class="row tot"><span>ส่วนแบ่ง ' + d.pct + '%</span><span>' + baht(d.share) + '</span></div><div class="hint">' + (d.payout === 'coin' ? 'จ่ายเป็น Coin' : 'โอนเงินรายเดือน ขั้นต่ำ ' + baht(d.minPayout) + ' (ไม่ถึงยกไปเดือนหน้า)') + '</div></div>' +
+        '<div class="box"><div class="row"><span>ยอดขายจากป้ายเดือนนี้</span><span>' + baht(d.sales) + '</span></div><div class="row tot"><span>ส่วนแบ่ง ' + d.pct + '%</span><span>' + baht(d.share) + '</span></div><div class="hint">' + (d.payout === 'coin' ? 'จ่ายเป็นส่วนลดสะสม' : 'โอนเงินรายเดือน ขั้นต่ำ ' + baht(d.minPayout) + ' (ไม่ถึงยกไปเดือนหน้า)') + '</div></div>' +
         '<div class="box"><h3>รอบจุดรับวันนี้ ' + esc(d.round.time) + '</h3><div class="row"><span>ออเดอร์รอรับ</span><span>' + d.round.orders + '</span></div><div class="row"><span>ยอดรวม</span><span>' + baht(d.round.total) + ' / ' + baht(d.round.min) + '</span></div><div class="hint">ลูกค้ามารับภายใน ' + d.round.hold + ' นาที</div></div>' +
         '<div class="box"><h3>ออเดอร์ล่าสุดจากป้าย</h3>' + (d.recent.length ? d.recent.map(function (x) { return '<div class="row"><span>' + esc(x.who) + ' · ' + esc(x.order) + '</span><span>' + baht(x.sales) + ' → ' + baht(x.share) + '</span></div>'; }).join('') : '<div class="hint">ออเดอร์ที่ร้านเปิดบิลแล้วจะขึ้นที่นี่</div>') + '</div></div>');
     });
@@ -859,10 +1035,21 @@
       }, function () { busy(false); toast('ใช้ตำแหน่งไม่ได้ (ยังไม่อนุญาต) พิมพ์จุดสังเกตแทนได้', 4000); }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
     },
     submitOrder: function () {
-      run('กำลังส่งออเดอร์...', api('submitOrder', { lines: S.cart.lines, bundles: S.cart.bundles, useCoin: !!S.cart.useCoin, mode: S.cart.mode, slot: S.cart.slot }), function (r) {
-        S.cart.lines = {}; S.cart.bundles = {}; S.cart.useCoin = false; saveCart();
-        return refreshMe().then(function () { go('done', { id: r.orderId, dd: r.deliverDate || '' }); });
+      var evx = !!(S.cart.evening && evOn() && S.cart.mode === 'deliver');
+      run('กำลังส่งออเดอร์...', api('submitOrder', { lines: S.cart.lines, bundles: S.cart.bundles, useCoin: !!S.cart.useCoin, mode: S.cart.mode, slot: S.cart.slot, needBy: evx ? undefined : S.cart.needBy || '', evening: evx, eveningDate: evx ? S.cart.eveningDate || '' : '' }), function (r) {
+        S.cart.lines = {}; S.cart.bundles = {}; S.cart.useCoin = false; S.cart.evening = false; S.cart.eveningDate = ''; saveCart();
+        go('done', { id: r.orderId, dd: r.deliverDate || '', slot: r.slot || '', depart: r.depart || '', mode: r.mode || '', pool: r.pool ? '1' : '', evening: r.evening ? '1' : '', payBy: r.payBy || '' });
+        refreshMe().catch(function () { }); // อัปเดตข้อมูลของฉันเบื้องหลัง ไม่ต้องรอ
       });
+    },
+    setMode: function (el) { S.cart.mode = el.dataset.p; S.cart.modeSet = true; saveCart(); pageCart(); },
+    memberLinkRemove: function (el) {
+      if (!el.dataset.sure) { el.dataset.sure = '1'; el.textContent = 'ยืนยันถอด'; return; }
+      run('กำลังถอด...', api('memberLinkRemove', { code: el.dataset.code }), function () { toast('ถอดแล้ว'); return refreshMe().then(pageCard); });
+    },
+    privacyRequest: function (el) {
+      if (!el.dataset.sure) { el.dataset.sure = '1'; el.textContent = 'กดอีกครั้งเพื่อยืนยันขอลบข้อมูล'; return; }
+      run('กำลังส่งคำขอ...', api('privacyRequest', { kind: 'delete' }), function () { toast('ร้านได้รับคำขอแล้ว จะดำเนินการและแจ้งให้ทราบ', 4500); return refreshMe().then(pageCard); });
     },
     received: function (el) { run('กำลังบันทึก...', api('confirmReceived', { id: el.dataset.id }), function () { toast('ขอบคุณที่ยืนยันค่ะ'); return refreshMe().then(pageBill); }); },
     resetMe: function (el) {
@@ -884,7 +1071,7 @@
   var FORMS = {
     register: function (f) {
       var fd = new FormData(f), g = S.ui.geo || {};
-      run('กำลังลงทะเบียน...', api('register', { name: fd.get('name'), contact: fd.get('contact') || '', type: fd.get('type') || 'FS', address: fd.get('address') || '', phone: fd.get('phone'), zone: fd.get('zone') || '',
+      run('กำลังลงทะเบียน...', api('register', { name: fd.get('name'), contact: fd.get('contact') || '', type: fd.get('type') || 'FS', trade: fd.get('trade') || '', address: fd.get('address') || '', phone: fd.get('phone'), zone: fd.get('zone') || '',
         lat: g.lat || '', lng: g.lng || '', consent: !!fd.get('consent'), ref: S.params.ref || '', src: S.params.ref ? '' : (S.params.src || '') }), function (r) {
         return refreshMe().then(function () { toast(r.flagged ? 'ลงทะเบียนแล้ว ร้านจะตรวจข้อมูลก่อนให้สิทธิ์ลูกค้าใหม่' : 'ลงทะเบียนเรียบร้อย'); S.history = []; go(r.member.sourceKind === 'ref' ? 'catalog' : 'home', r.member.sourceKind === 'ref' ? { cat: 'set' } : {}, true); });
       }).then(function (r) { if (!r && S.lastErr && S.lastErr.code === 'LINK') { S.ui.linkFound = null; go('link', { phone: fd.get('phone') }); } });
@@ -915,9 +1102,15 @@
       run('กำลังบันทึก...', api('standingSave', { items: items, days: days, slot: fd.get('slot') }), function (r) { toast('บันทึกสั่งประจำแล้ว'); S.data.standing = { standing: r.standing }; pageStanding(); });
     },
     profileSave: function (f) {
-      var fd = new FormData(f), g = S.ui.geo || {}, data = { zone: fd.get('zone') || '', address: fd.get('address') || '' };
+      var fd = new FormData(f), g = S.ui.geo || {}, data = { address: fd.get('address') || '', deliveryNote: fd.get('deliveryNote') || '', needBy: fd.get('needBy') || '' };
+      if (fd.get('zone') !== null) data.zone = fd.get('zone') || '';
+      if (fd.get('trade') !== null) data.trade = fd.get('trade') || '';
       if (g.lat && !g.saved) { data.lat = g.lat; data.lng = g.lng; }
       run('กำลังบันทึก...', api('profileSave', data), function () { toast('บันทึกข้อมูลจัดส่งแล้ว'); S.ui.geo = undefined; return refreshMe().then(pageCard); });
+    },
+    memberInvite: function (f) { run('กำลังสร้างลิงก์...', api('memberInvite', { name: new FormData(f).get('name') || '' }), function (r) { S.ui.memberInvite = r; return refreshMe().then(pageCard); }); },
+    joinConfirm: function (f) {
+      run('กำลังเข้าร่วม...', api('memberLinkJoin', { code: S.params.code, consent: !!new FormData(f).get('consent') }), function () { return refreshMe().then(function () { toast('เข้าร่วมแล้ว สั่งของได้เลย'); S.history = []; go('home', {}, true); }); });
     },
     staffJoin: function (f) { run('กำลังตรวจรหัส...', api('staffJoin', { code: new FormData(f).get('code') }), function () { return refreshMe().then(function () { toast('ตั้งเป็นผู้จัดการแล้ว'); go('admin', {}, true); }); }); }
   };
@@ -966,6 +1159,10 @@
     if (c === 'useCoin') { S.cart.useCoin = t.checked; saveCart(); pageCart(); }
     else if (c === 'mode') { S.cart.mode = t.value; S.cart.modeSet = true; saveCart(); pageCart(); }
     else if (c === 'slot') { S.cart.slot = t.value; saveCart(); }
+    else if (c === 'needBy') { S.cart.needBy = t.value; saveCart(); }
+    else if (c === 'when') { S.cart.evening = t.value === 'evening'; saveCart(); pageCart(); }
+    else if (c === 'evDate') { S.cart.eveningDate = t.value; saveCart(); }
+    else if (c === 'regType') { S.ui.regType = t.value; var kept = {}; Array.prototype.forEach.call(t.form.elements, function (el) { if (el.name) kept[el.name] = el.value; }); pageRegister(); Array.prototype.forEach.call(app.querySelectorAll('form[data-form=register] [name]'), function (el) { if (kept[el.name] !== undefined && el.type !== 'checkbox') el.value = kept[el.name]; }); }
     else if (c === 'slip') pickSlip(t);
     else if (window.PKAdmin && window.PKAdmin.change) window.PKAdmin.change(t, c);
   });
@@ -1001,14 +1198,18 @@
       sdk.onload = function () { boot(); }; sdk.onerror = function () { fatal('โหลด LINE ไม่สำเร็จ ตรวจอินเทอร์เน็ตแล้วลองใหม่'); };
       document.head.appendChild(sdk); return;
     }
-    var cached = store(BOOT_KEY);
+    var cached = store(BOOT_KEY), fresh = cached && cached.v === APP_VERSION && validCat(cached.cat) && Date.now() - cached.at < 12 * 3600e3;
+    S.params = readParams(); S.page = S.params.page || 'home'; S.asRole = (store('pk2_asrole') || '');
+    if (fresh && validMe(cached.me) && !S.params.inv && !S.params.ref && !S.params.src) { // เปิดทันทีจากข้อมูลล่าสุดในเครื่อง ไม่ต้องรอ LINE (เร็วขึ้น ~1 วินาที)
+      S.cat = cached.cat; S.me = cached.me; S.fromCache = true; S.early = true; loadCart(); show();
+    }
     liff.init({ liffId: CFG.LIFF_ID, withLoginOnExternalBrowser: true }).then(function () {
       if (!liff.isLoggedIn()) { liff.login({ redirectUri: location.href }); return null; }
-      S.params = readParams();
-      S.page = S.params.page || 'home';
+      readyResolve();
       cleanUrl();
       var uid = ''; try { uid = (liff.getContext() || {}).userId || ''; } catch (e) { }
-      if (cached && cached.v === APP_VERSION && validCat(cached.cat) && Date.now() - cached.at < 12 * 3600e3) {
+      if (S.early && uid && cached.uid !== uid) { S.me = null; S.early = false; S.fromCache = false; bootScreen(); } // คนละบัญชี LINE → ไม่ใช้ข้อมูลเก่า
+      if (!S.early && fresh) {
         S.cat = cached.cat;
         if (uid && cached.uid === uid && validMe(cached.me)) { S.me = cached.me; S.fromCache = true; loadCart(); show(); }
       }
@@ -1019,14 +1220,16 @@
       var first = !S.fromCache;
       S.cat = res.catalog; S.me = res.me; S.fromCache = false;
       loadCart(); saveBoot();
-      if (S.params.src && !S.params.ref && !S.me.member) {
-        try { if (!sessionStorage.getItem('scan_' + S.params.src)) { sessionStorage.setItem('scan_' + S.params.src, '1'); api('scan', { src: S.params.src }, { quiet: true, tries: 1 }).catch(function () { }); } } catch (e) { }
+      if ((S.params.src || S.params.ref) && !S.me.member) { // นับ "สแกน/เปิดลิงก์" ของป้ายและลิงก์ชวน (ครั้งเดียวต่อการเปิด)
+        var sk = 'scan_' + (S.params.src || 'r:' + S.params.ref);
+        try { if (!sessionStorage.getItem(sk)) { sessionStorage.setItem(sk, '1'); api('scan', { src: S.params.ref ? '' : S.params.src, ref: S.params.ref || '', page: S.page }, { quiet: true, tries: 1 }).catch(function () { }); } } catch (e) { }
       }
       if ((S.params.ref || S.params.src) && !S.me.member && S.page === 'home') S.page = 'register';
       if (S.params.inv) S.page = 'staffjoin';
       if (first || !formBusy()) show();
       setTimeout(prefetch, 600);
     }).catch(function (e) {
+      readyResolve(); // ให้คำสั่งที่รออยู่ทำงานต่อ (จะแจ้งให้เปิดใหม่ถ้ายืนยันตัวตนไม่ได้)
       if (S.cat && S.me) { toast('อัปเดตข้อมูลไม่สำเร็จ แสดงข้อมูลล่าสุดที่มี', 4000); return; }
       if (e && e.code === 'AUTH') return fail(e);
       fatal(e && e.code === 'NET' ? 'เชื่อมต่อร้านไม่สำเร็จ' : 'เปิดระบบไม่สำเร็จ', e);
@@ -1040,6 +1243,7 @@
   /* ให้ admin.js ใช้ตัวช่วยชุดเดียวกัน */
   window.PKCore = { S: S, api: api, run: run, render: render, top: top, icon: icon, esc: esc, fmt: fmt, baht: baht, toast: toast, busy: busy, go: go, show: show, fail: fail, friendly: friendly, techNote: techNote,
     statusPill: statusPill, qrSvg: qrSvg, copyText: copyText, openUrl: openUrl, appLink: appLink, imgUrl: imgUrl, thumb: thumb, prod: prod, thDate: thDate, store: store, refreshMe: refreshMe,
-    zoneName: zoneName, zoneSelect: zoneSelect, canShare: canShare, ACT: ACT, FORMS: FORMS, todayStr: todayStr, nowHM: nowHM, version: APP_VERSION };
+    zoneName: zoneName, zoneSelect: zoneSelect, canShare: canShare, ACT: ACT, FORMS: FORMS, todayStr: todayStr, nowHM: nowHM, version: APP_VERSION,
+    perf: PERF, evDayText: evDayText, offerText: offerText, rewardText: rewardText, txnNorm: function (v, n) { var d = String(v || '').replace(/\D/g, ''); n = n || 7; return d.length >= n ? d.slice(-n) : d.length >= 4 ? ('0000000000' + d).slice(-n) : ''; } };
   boot();
 })();
