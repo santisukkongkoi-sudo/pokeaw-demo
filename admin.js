@@ -1,5 +1,6 @@
-/* หน้าหลังร้าน Betagro Shop โพธิ์แก้ว v2 — โหลดเฉพาะพนักงาน (ลูกค้าไม่ต้องดาวน์โหลดไฟล์นี้)
- * แจ้งออเดอร์ใหม่อัตโนมัติ · ตัวกรองวันที่ · ดาวน์โหลด Excel · ตรวจยอดโอน · จัดรอบส่ง · จัดการทีม */
+/* หน้าหลังร้าน Betagro Shop โพธิ์แก้ว v3 — โหลดเฉพาะพนักงาน (ลูกค้าไม่ต้องดาวน์โหลดไฟล์นี้)
+ * แจ้งออเดอร์ใหม่อัตโนมัติ · ตัวกรองวันที่ · ดาวน์โหลด Excel · ตรวจยอดโอน · จัดรอบส่ง · จัดการทีม
+ * v3.0.0: โปร Smart/Magnet · สต็อก SAP (F1595/F1077) · แต้มผู้แนะนำ · ช่องทาง QR · KPI · พื้นที่จัดส่ง · รีเซ็ตข้อมูล UAT */
 (function () {
   'use strict';
   var C = window.PKCore, S = C.S, api = C.api, run = C.run, render = C.render, top = C.top, icon = C.icon, esc = C.esc, fmt = C.fmt, baht = C.baht, toast = C.toast;
@@ -16,7 +17,7 @@
   A.from = A.to = A.routeDate = today();
 
   var TABS = [['orders', 'ออเดอร์', 'view'], ['pay', 'ชำระเงิน', 'view'], ['route', 'จัดรอบส่ง', 'route'], ['members', 'สมาชิก', 'view'], ['aff', 'ชวนเพื่อน & ป้าย', 'view'],
-    ['price', 'ราคา & สต็อก', 'view'], ['report', 'รายงาน', 'view'], ['bc', 'บรอดแคสต์', 'manage'], ['team', 'ทีมงาน', 'manage'], ['tools', 'เครื่องมือ', 'manage']];
+    ['price', 'ราคา & สต็อก', 'view'], ['promo', 'โปร Smart/Magnet', 'view'], ['stock', 'สต็อก SAP', 'view'], ['report', 'รายงาน', 'view'], ['bc', 'บรอดแคสต์', 'manage'], ['team', 'ทีมงาน', 'manage'], ['tools', 'เครื่องมือ', 'manage']];
   /* ทดสอบบทบาท (ผู้จัดการ + TEST_MODE): หน้าจอและสิทธิ์เหมือนบทบาทที่เลือก — หลังบ้านลดสิทธิ์ให้จริงด้วย */
   var ROLE_AS = { cashier: ['พนักงานร้าน', ['view', 'orders', 'pay', 'members', 'route', 'stock', 'export', 'pii']], driver: ['พนักงานส่งของ', ['route', 'pii']], viewer: ['ดูอย่างเดียว', ['view', 'export']] };
   function staffNow() {
@@ -40,7 +41,7 @@
   }
   function bulkBtn(g, op, label, count, extra) { return count ? '<button class="btn sm' + (extra && extra.cls ? ' ' + extra.cls : ' blue') + '" data-a="admBulk" data-g="' + g + '" data-op="' + op + '"' + (extra && extra.confirm ? ' data-confirm="1"' : '') + (extra && extra.p ? ' data-p="' + esc(extra.p) + '"' : '') + '>' + label + ' (' + count + ')</button>' : ''; }
   function tabs() { return TABS.filter(function (t) { return can(t[2]) || (t[0] === 'route' && can('route')); }); }
-  var RANGE_TABS = { orders: 1, pay: 1, report: 1 };
+  var RANGE_TABS = { orders: 1, pay: 1, report: 1, promo: 1 };
 
   /* ---------- โหลดข้อมูลแท็บ (แสดงของเดิมทันที แล้วอัปเดตเบื้องหลัง) ---------- */
   function key(tab) { return tab + '|' + (RANGE_TABS[tab] ? A.from + '|' + A.to : '') + (tab === 'route' ? '|' + A.routeDate : ''); }
@@ -72,7 +73,7 @@
     var h = top('หน้าหลังร้าน', (st.label || st.role) + ' · ' + (st.name || ''), false, tools);
     if (st.viewAs) h += '<div class="view-as">' + ic('users') + '<span>กำลังทดสอบเป็น <b>' + esc(st.label) + '</b> · เห็นแท็บและทำได้เท่าบทบาทนี้</span><button class="btn sm" data-a="admAsRole" data-p="">กลับเป็นผู้จัดการ</button></div>';
     if (A.alert > 0) h += '<button class="new-banner" data-a="admBanner">' + ic('bell') + '<b>ออเดอร์ใหม่ ' + A.alert + ' รายการ</b><span>แตะเพื่อดู</span></button>';
-    var badge = { orders: cn.newOrders, pay: cn.payReview, route: cn.deliveries, members: cn.pendingMembers, aff: cn.coinsPending };
+    var badge = { orders: cn.newOrders, pay: cn.payReview, route: cn.deliveries, members: cn.pendingMembers, aff: (cn.coinsPending || 0) + (cn.pointsReview || 0), stock: cn.stockAlert ? '!' : cn.stockLow };
     h += '<div class="tabs">' + tabs().map(function (x) { return '<button class="tab' + (A.tab === x[0] ? ' on' : '') + '" data-a="tab" data-p="' + x[0] + '">' + x[1] + (badge[x[0]] ? '<span class="cnt">' + badge[x[0]] + '</span>' : '') + '</button>'; }).join('') + '</div>';
     h += '<div class="wrap wide">';
     if (A.tab !== 'team' && A.tab !== 'tools' && can('view')) h += '<div class="admin-overview">' + [['orders', 'รอตรวจออเดอร์', cn.newOrders], ['orders', 'กำลังจัดของ', cn.approved], ['pay', 'รอตรวจยอดโอน', cn.payReview], ['members', 'สมาชิกใหม่', cn.pendingMembers]].concat(cn.evening ? [['route', 'รอบเย็นวันนี้', cn.evening, cn.eveningUnpaid ? 'ยังไม่จ่าย ' + cn.eveningUnpaid : 'จ่ายครบ']] : []).map(function (x) { return '<button class="stat-card" data-a="tab" data-p="' + x[0] + '"><span>' + x[1] + '</span><strong>' + (x[2] || 0) + '</strong>' + (x[3] ? '<small class="hint">' + x[3] + '</small>' : '') + '</button>'; }).join('') + '</div>';
@@ -82,7 +83,7 @@
     var d = A.d[key(A.tab)]; if (!d) return show();
     var cfg = d.cfg || {}, CFG = window.APP_CONFIG || {};
     var warn = cfg.LIFF_ID && cfg.LIFF_ID !== CFG.LIFF_ID ? '<div class="alert bad">LIFF_ID ในชีต Config (' + esc(cfg.LIFF_ID) + ') ไม่ตรงกับ config.js (' + esc(CFG.LIFF_ID) + ') ปุ่มในการ์ดแชตและลิงก์ชวนจะเปิดไม่ได้ ให้แก้ให้ตรงกัน</div>' : '';
-    var body = ({ orders: adOrders, pay: adPay, route: adRoute, members: adMembers, aff: adAff, price: adPrice, report: adReport, bc: adBc, team: adTeam, tools: adTools }[A.tab] || adOrders)(d);
+    var body = ({ orders: adOrders, pay: adPay, route: adRoute, members: adMembers, aff: adAff, price: adPrice, promo: adPromo, stock: adStock, report: adReport, bc: adBc, team: adTeam, tools: adTools }[A.tab] || adOrders)(d);
     render(shell(warn + body));
     document.title = (A.alert ? '(' + A.alert + ') ออเดอร์ใหม่ · ' : '') + 'หลังร้าน · ' + (TABS.filter(function (t) { return t[0] === A.tab; })[0] || [0, ''])[1];
   }
@@ -102,6 +103,11 @@
   /* ---------- ออเดอร์ ---------- */
   function posLines(o, cfg) {
     var out = [];
+    if (o.promoDisc > 0) {
+      var det = (o.items || []).filter(function (l) { return l.promoDisc > 0; }).map(function (l) { return l.name.replace(/\s*\(ตัวอย่าง\)/, '') + (o.promo === 'SMART' && l.promoQty ? ' ' + l.promoQty + ' ชิ้น' : '') + ' −' + fmt(l.promoDisc); });
+      out.push((o.promo === 'MAGNET' ? 'Magnet Set (สิทธิ์ลูกค้าใหม่ ลด ' + cfg.MAGNET_DISCOUNT + '%)' : 'Smart Set ลด ' + cfg.SMART_DISCOUNT + '% ' + o.smartUsed + ' ชิ้น') + ': ส่วนลดท้ายบิล ' + baht(o.promoDisc) + (det.length ? ' (' + det.join(', ') + ')' : ''));
+    }
+    if (o.pointsDisc > 0) out.push('ส่วนลดแต้มสะสม ' + baht(o.pointsDisc) + ' (ใช้ ' + fmt(o.pointsUse) + ' แต้ม)');
     if (o.coupon > 0) out.push(cfg.POS_MODE === 'freebie' ? 'ของแถมแทนคูปอง มูลค่า ' + baht(o.coupon) + ' (คีย์ 0 บาท)' : 'ส่วนลดท้ายบิล ' + baht(o.coupon) + ' (คูปองลูกค้าใหม่)');
     if (o.coinUse > 0) out.push(cfg.POS_MODE === 'freebie' ? 'แลก Coin เป็นสินค้ามูลค่า ' + baht(o.coinUse * cfg.COIN_VALUE) : 'ส่วนลด Coin ' + baht(o.coinUse * cfg.COIN_VALUE));
     o.bundles.forEach(function (b) { out.push(b.name + ' ×' + b.qty + ': คีย์รายการตามเซ็ต แล้วลดให้เหลือ ' + baht(b.price * b.qty)); });
@@ -115,12 +121,13 @@
   function orderCard(o, d, list) {
     var other = list.filter(function (x) { return x !== o && x.memberId === o.memberId && (x.status === 'new' || x.status === 'approved'); })[0];
     var h = '<article class="ord' + (o.status === 'new' ? ' is-new' : '') + ((A.pick.ord || {})[o.id] ? ' picked' : '') + '" id="o-' + esc(o.id) + '"><div class="ord-h">' + (/new|approved|billed/.test(o.status) ? pickBox('ord', o.id, o.id + ' ' + o.memberName) : '') + '<b class="mono">' + esc(o.id) + '</b><span class="hint">' + esc(o.created) + '</span><span class="pill">' + esc(o.src) + '</span>' + evPill(o) +
-      (o.attName ? '<span class="pill appr">' + esc((o.attKind === 'ref' ? 'ผู้ชวน: ' : 'ป้าย: ') + o.attName) + '</span>' : '') + '<span style="flex:1"></span>' + statusPill(o.status) + '</div>' +
+      (o.attName ? '<span class="pill appr">' + esc((o.attKind === 'ref' ? 'ผู้ชวน: ' : 'ป้าย: ') + o.attName) + '</span>' : '') + (o.memberStatus === 'new' ? '<span class="pill paid">ลูกค้าใหม่</span>' : o.memberStatus === 'review' ? '<span class="pill new">ลูกค้ารอตรวจ</span>' : '') + (o.preOrder ? '<span class="pill bill">สั่งนอกเวลาร้าน</span>' : '') + (o.promo ? '<span class="pill appr">' + (o.promo === 'MAGNET' ? 'Magnet' : 'Smart Set') + '</span>' : '') + (o.ship && /grace|exc|band/.test(o.ship.area) ? areaTag(o.ship.area) : '') + '<span style="flex:1"></span>' + statusPill(o.status) + '</div>' +
       '<div><b>' + esc(o.memberName) + '</b> <span class="mono hint">' + esc(o.sno || 'ยังไม่มีเลข S') + '</span>' + (o.memberApproved ? '' : ' <span class="pill red">สมาชิกรออนุมัติ</span>') + ' ' + tel(o.phone) + '</div>' +
       '<div class="hint">' + (o.mode === 'pickup' ? 'รับที่จุด ' + esc(o.pickup) : 'ส่ง: ' + esc(o.slot) + (o.deliverDate && o.deliverDate !== today() ? ' · ' + C.thDate(o.deliverDate) : '') + (o.zone ? ' · โซน ' + esc(C.zoneName(o.zone)) : '')) + ' · ~' + o.kg + ' กก.' + (o.updatedBy ? ' · ล่าสุดโดย ' + esc(o.updatedBy) : '') + '</div>' +
       o.bundles.map(function (l) { return '<div class="row"><span>' + esc(l.name) + ' ×' + l.qty + ' (เซ็ต)</span><span>' + baht(l.price * l.qty) + '</span></div>'; }).join('') +
       o.items.map(function (l) { return '<div class="row"><span>' + esc(l.name) + ' ×' + l.qty + ' @' + fmt(l.price) + '</span><span>' + baht(l.price * l.qty) + '</span></div>'; }).join('') +
       '<div class="row tot"><span>ยอดประมาณ</span><span>' + baht(o.est) + '</span></div>' +
+      (o.stockWarn && o.stockWarn.length ? '<div class="alert bad">สต็อกล่าสุดไม่พอ: ' + esc(o.stockWarn.join(', ')) + ' — ตรวจของจริงก่อนอนุมัติ / แจ้งลูกค้า</div>' : '') +
       (o.belowMin ? '<div class="alert warn">ต่ำกว่าขั้นต่ำ → ส่งรวมรอบถัดไปที่ผ่านย่านนี้</div>' : '') + (other ? '<div class="alert info">ลูกค้ารายนี้มีออเดอร์ค้างส่ง ' + esc(other.id) + ' รวมรอบเดียวกันได้</div>' : '');
     if (o.status !== 'cancelled' && o.status !== 'paid') h += '<div class="pos"><b>ทำใน POS</b>' + posLines(o, d.cfg).map(function (x) { return '<div>• ' + esc(x) + '</div>'; }).join('') + (o.txn ? '<div>บิล ' + esc(o.txn) + ' · ยอดจริง ' + baht(o.actual) + '</div>' : '') + '</div>';
     var edit = can('orders');
@@ -146,6 +153,7 @@
     groups.forEach(function (g) {
       var list = open.filter(function (o) { return o.status === g[0]; });
       if (!list.length) return;
+      if (g[0] === 'new') list = list.filter(function (o) { return o.preOrder; }).concat(list.filter(function (o) { return !o.preOrder; })); // ออเดอร์ที่สั่งตอนร้านปิด ขึ้นก่อน (จัดตอนเปิดร้าน)
       var ids = list.map(function (o) { return o.id; });
       if (g[0] === 'billed') { h += '<details class="box group"' + (ids.some(function (id) { return (A.pick.ord || {})[id]; }) ? ' open' : '') + '><summary>' + g[1] + ' (' + list.length + ')</summary>' + pickAll('ord', ids) + list.map(function (o) { return orderCard(o, d, open); }).join('') + '</details>'; return; }
       h += '<h3 class="group-h">' + g[1] + ' <span class="cnt-pill">' + list.length + '</span>' + pickAll('ord', ids) + '</h3>' + list.map(function (o) { return orderCard(o, d, open); }).join('');
@@ -356,8 +364,10 @@
     if (edit) h += bulkBar('mnew', [bulkBtn('mnew', 'approveMember', 'อนุมัติ (ใช้เลข S ที่กรอกในแต่ละร้าน)', picked('mnew').length), bulkBtn('mnew', 'rejectMember', 'ปิดบัญชี', picked('mnew').length, { cls: 'bad', confirm: 1 })]);
     if (!d.pendingMembers.length) h += '<div class="empty">ไม่มีรายการรอตรวจ</div>';
     d.pendingMembers.forEach(function (m) {
-      h += '<form class="ord" data-form="approveMember" data-id="' + esc(m.id) + '"><div class="ord-h">' + (edit ? pickBox('mnew', m.id, m.name) : '') + '<b>' + esc(m.name) + '</b><span class="pill appr">' + esc(m.sourceKind === 'ref' ? 'ผู้ชวน: ' + m.sourceName : m.sourceKind === 'sign' ? 'ป้าย: ' + m.sourceName : 'สมัครเอง') + '</span>' + (m.flags ? '<span class="pill red">ธงแดง</span>' : '') + '</div>' +
-        '<div class="hint">เบอร์ ' + tel(m.phone) + ' · ' + esc(m.type) + ' · ลงทะเบียน ' + esc(C.thDate(m.regDate)) + (m.address ? ' · ' + esc(m.address) : '') + (m.zone ? ' · โซน ' + esc(C.zoneName(m.zone)) : '') + '</div>' + (m.flags ? '<div class="alert bad">' + esc(m.flags) + '</div>' : '') +
+      h += '<form class="ord" data-form="approveMember" data-id="' + esc(m.id) + '"><div class="ord-h">' + (edit ? pickBox('mnew', m.id, m.name) : '') + '<b>' + esc(m.name) + '</b><span class="pill appr">' + esc(m.sourceKind === 'ref' ? 'ผู้ชวน: ' + m.sourceName : m.sourceKind === 'sign' ? 'ป้าย: ' + m.sourceName : 'สมัครเอง') + '</span>' + mstPill(m.status) + (m.channel ? '<span class="pill">' + esc(m.channel) + '</span>' : '') + (m.flags ? '<span class="pill red">ธงแดง</span>' : '') + '</div>' +
+        '<div class="hint">เบอร์ ' + tel(m.phone) + ' · ' + esc(m.type === 'Consumer' ? 'บ้าน (B2C)' : 'ร้าน (B2B)') + ' · ลงทะเบียน ' + esc(C.thDate(m.regDate)) + (m.address ? ' · ' + esc(m.address) : '') + (m.zone ? ' · โซน ' + esc(C.zoneName(m.zone)) : '') + (m.taxId ? ' · เลขภาษี <span class="mono">' + esc(m.taxId) + '</span>' : '') + (m.couponLock ? ' · <b>คูปองรอยืนยันร้าน</b>' : '') + '</div>' + (m.flags ? '<div class="alert bad">' + esc(m.flags) + '</div>' : '') +
+        (m.shopPhoto ? '<button class="btn sm" type="button" data-a="admShopPhoto" data-id="' + esc(m.id) + '">ดูรูปหน้าร้าน</button>' : '') +
+        (edit && m.status === 'review' ? '<div class="acts"><span class="hint">ระบบสงสัยว่าเป็นลูกค้าเดิม (เลขภาษี/หมุด/ข้อมูลซ้ำ) · ตรวจใน POS แล้วเลือก:</span><button type="button" class="btn sm blue" data-a="adm" data-op="memberStatus" data-id="' + esc(m.id) + '" data-status="new">เป็นลูกค้าใหม่จริง (ให้สิทธิ์)</button><button type="button" class="btn sm" data-a="adm" data-op="memberStatus" data-id="' + esc(m.id) + '" data-status="existing">เป็นลูกค้าเดิม (ไม่ให้สิทธิ์)</button></div>' : '') +
         (edit ? '<div class="hint">ตรวจใน POS ว่าเบอร์/ชื่อนี้ไม่เคยซื้อใน 6 เดือน แล้วเปิดเลขสมาชิกใหม่</div><div class="acts"><div class="field"><label>เลขสมาชิก S (จาก POS)</label><input name="sno" class="mono" required autocomplete="off"></div><div class="field"><label>โซนส่ง</label><select name="zone"><option value="">—</option>' + zones.map(function (z) { return '<option value="' + esc(z.id) + '"' + (z.id === m.zone ? ' selected' : '') + '>' + esc(z.name) + '</option>'; }).join('') + '</select></div>' +
           (m.flags ? '<label class="chk"><input type="checkbox" name="clearFlags"><span>ตรวจแล้ว ล้างธงแดง (ให้สิทธิ์ลูกค้าใหม่)</span></label>' : '') + '<button class="btn blue" type="submit">อนุมัติ</button><button class="btn bad sm" type="button" data-a="adm" data-op="rejectMember" data-id="' + esc(m.id) + '" data-confirm="1">ปิดบัญชี</button></div>' : '') + '</form>';
     });
@@ -367,9 +377,9 @@
     if (edit) h += bulkBar('mem', ['<select id="bulk-zone" aria-label="โซน"><option value="">เลือกโซน…</option>' + zones.map(function (z) { return '<option value="' + esc(z.id) + '">' + esc(z.name) + '</option>'; }).join('') + '</select>', bulkBtn('mem', 'memberZone', 'ตั้งโซน', picked('mem').length)]);
     h += '<div class="tblw"><table><thead><tr>' + (edit ? '<th>' + pickAll('mem', list.slice(0, 200).map(function (m) { return m.id; }), ' ') + '</th>' : '') + '<th>ร้าน</th><th>เบอร์</th><th>เลข S</th><th>โซน</th><th>หมุด</th><th></th></tr></thead><tbody>' + list.slice(0, 200).map(function (m) {
       var open = A.open['mem-' + m.id];
-      return '<tr>' + (edit ? '<td class="pick-cell">' + pickBox('mem', m.id, m.name) + '</td>' : '') + '<td>' + esc(m.name) + (m.yard ? ' <span class="pill appr">ลานเย็น ' + esc(m.yard) + '</span>' : '') + (m.approved ? '' : ' <span class="pill new">รออนุมัติ</span>') + (m.links ? ' <span class="pill appr">+' + m.links + ' LINE</span>' : '') + '<br><small class="hint">' + esc([m.trade, m.address, m.deliveryNote ? 'จุดจอด: ' + m.deliveryNote : '', m.needBy ? 'ต้องได้ก่อน ' + m.needBy : ''].filter(Boolean).join(' · ')) + '</small></td><td>' + tel(m.phone) + '</td><td class="mono">' + esc(m.sno) + '</td><td>' + esc(C.zoneName(m.zone) || '-') + '</td><td>' + (m.lat ? '<a href="https://www.google.com/maps/search/?api=1&query=' + m.lat + ',' + m.lng + '" target="_blank" rel="noopener">✓ ดู</a>' : '—') + '</td><td>' + (edit ? '<button class="btn sm" data-a="admToggle" data-k="mem-' + esc(m.id) + '">' + (open ? 'ปิด' : 'แก้') + '</button>' : '') + '</td></tr>' +
-        (open ? '<tr><td colspan="7"><form class="acts" data-form="memberUpdate" data-id="' + esc(m.id) + '"><div class="field"><label>โซน</label><select name="zone"><option value="">—</option>' + zones.map(function (z) { return '<option value="' + esc(z.id) + '"' + (z.id === m.zone ? ' selected' : '') + '>' + esc(z.name) + '</option>'; }).join('') + '</select></div><div class="field"><label>ที่อยู่</label><input name="address" value="' + esc(m.address) + '"></div><div class="field"><label>เบอร์</label><input name="phone" value="' + esc(m.phone) + '"></div><div class="field"><label>พิกัด (วางลิงก์ Google Maps หรือ lat,lng)</label><input name="geo" value="' + (m.lat ? m.lat + ',' + m.lng : '') + '" placeholder="13.80,100.64"></div>' +
-          '<div class="field"><label>จุดจอด / คนรับ / เวลารับได้</label><input name="deliveryNote" value="' + esc(m.deliveryNote || '') + '"></div><div class="field"><label>ต้องได้ก่อน (HH:MM)</label><input name="needBy" value="' + esc(m.needBy || '') + '" placeholder="10:00"></div><div class="field"><label>ประเภทธุรกิจ</label><input name="trade" value="' + esc(m.trade || '') + '" list="trade-list"></div><div class="field"><label>ร้านในลานเย็น (ช่อง เช่น Y1 · ว่าง = ไม่ใช่)</label><input name="yard" maxlength="10" value="' + esc(m.yard || '') + '"></div><button class="btn blue" type="submit">บันทึก</button></form></td></tr>' : '');
+      return '<tr>' + (edit ? '<td class="pick-cell">' + pickBox('mem', m.id, m.name) + '</td>' : '') + '<td>' + esc(m.name) + ' ' + mstPill(m.status) + (m.yard ? ' <span class="pill appr">ลานเย็น ' + esc(m.yard) + '</span>' : '') + (m.approved ? '' : ' <span class="pill new">รออนุมัติ</span>') + (m.links ? ' <span class="pill appr">+' + m.links + ' LINE</span>' : '') + '<br><small class="hint">' + esc([m.trade, m.address, m.deliveryNote ? 'จุดจอด: ' + m.deliveryNote : '', m.needBy ? 'ต้องได้ก่อน ' + m.needBy : ''].filter(Boolean).join(' · ')) + '</small></td><td>' + tel(m.phone) + '</td><td class="mono">' + esc(m.sno) + '</td><td>' + esc(C.zoneName(m.zone) || '-') + '</td><td>' + areaTag(m.areaExc ? 'exc' : m.area) + ' ' + (function () { var a = (m.addresses || []).filter(function (x) { return x.isDefault; })[0] || (m.addresses || [])[0]; return a ? mapLink(a.lat, a.lng, 'ดู') : m.lat ? mapLink(m.lat, m.lng, 'ดู') : ''; })() + '</td><td>' + (edit ? '<button class="btn sm" data-a="admToggle" data-k="mem-' + esc(m.id) + '">' + (open ? 'ปิด' : 'แก้') + '</button>' : '') + '</td></tr>' +
+        (open ? '<tr><td colspan="7"><form class="acts" data-form="memberUpdate" data-id="' + esc(m.id) + '"><div class="field"><label>โซน</label><select name="zone"><option value="">—</option>' + zones.map(function (z) { return '<option value="' + esc(z.id) + '"' + (z.id === m.zone ? ' selected' : '') + '>' + esc(z.name) + '</option>'; }).join('') + '</select></div><div class="field"><label>ที่อยู่</label><input name="address" value="' + esc(m.address) + '"></div><div class="field"><label>เบอร์</label><input name="phone" value="' + esc(m.phone) + '"></div>' +
+          '<div class="field"><label>จุดจอด / คนรับ / เวลารับได้</label><input name="deliveryNote" value="' + esc(m.deliveryNote || '') + '"></div><div class="field"><label>ต้องได้ก่อน (HH:MM)</label><input name="needBy" value="' + esc(m.needBy || '') + '" placeholder="10:00"></div><div class="field"><label>ประเภทธุรกิจ</label><input name="trade" value="' + esc(m.trade || '') + '" list="trade-list"></div><div class="field"><label>ร้านในลานเย็น (ช่อง เช่น Y1 · ว่าง = ไม่ใช่)</label><input name="yard" maxlength="10" value="' + esc(m.yard || '') + '"></div><button class="btn blue" type="submit">บันทึก</button></form>' + memberV3Tools(m, d) + '</td></tr>' : '');
     }).join('') + '</tbody></table></div>' + (list.length > 200 ? '<div class="hint">แสดง 200 รายการแรก ค้นหาเพื่อดูเพิ่ม</div>' : '');
     var link = d.cfg.LIFF_ID ? C.appLink('link', {}) : '';
     h += '<h3 class="group-h">ลูกค้าเดิมที่ยังไม่ย้าย (เรียงตามยอด)' + (edit ? pickAll('mig', mg.list.map(function (x) { return x.id; })) : '') + '</h3>';
@@ -382,7 +392,7 @@
   }
   /* นำเข้า/อัปเดตรายชื่อลูกค้าเดิม (Customer master จาก POS/SAP) */
   function memberImportBox() {
-    var im = A.imp, h = '<div class="box"><h3>' + ic('users') + ' นำเข้า / อัปเดตรายชื่อลูกค้าเดิม (Customer master)</h3><div class="hint">ไฟล์ .xlsx/.csv หัวตาราง: s_member_no, name, phone, type (FS/Consumer), address, zone, lat, lng, trade, contact, avg_month · จับคู่ด้วยเลข S ก่อน แล้วค่อยเบอร์ · ไม่แตะการผูก LINE · ใช้ข้อมูลสมมติในระบบทดลอง</div>' +
+    var im = A.imp, h = '<div class="box"><h3>' + ic('users') + ' นำเข้า / อัปเดตรายชื่อลูกค้าเดิม (Customer master)</h3><div class="hint">ไฟล์ .xlsx/.csv หัวตาราง: s_member_no, name, phone, type (FS/Consumer), address, zone, lat, lng, trade, contact, avg_month, tax_id · จับคู่ด้วยเลข S ก่อน แล้วค่อยเบอร์ · ลูกค้าในไฟล์ = ลูกค้าเดิม (ไม่ได้สิทธิ์ลูกค้าใหม่) · เลขภาษีใช้ตรวจร้านที่สมัครซ้ำ · ไม่แตะการผูก LINE · ใช้ข้อมูลสมมติในระบบทดลอง</div>' +
       '<div class="acts" style="margin-top:8px"><input type="file" accept=".xlsx,.csv" data-chg="admImport"><button class="btn sm" data-a="admImportTpl">' + ic('dl') + ' แม่แบบ .xlsx</button></div>';
     if (im) {
       h += '<div class="kv" style="margin-top:8px"><div><small>ใหม่</small><b>' + im.sum.new + '</b></div><div><small>อัปเดต</small><b>' + im.sum.update + '</b></div><div><small>ชน / ข้าม</small><b>' + im.sum.conflict + ' / ' + im.sum.skip + '</b></div></div>' +
@@ -397,8 +407,9 @@
     var mg = can('manage');
     var offs = (d.offers || []).filter(function (o) { return o.active; });
     var h = offs.length && d.cfg.OFFERS_ENABLED ? '<div class="box"><h3>กติกาส่วนลดที่ใช้อยู่ (แท็บ Offers)</h3>' + offs.map(function (o) { return '<div class="row"><span><b class="mono">' + esc(o.id) + '</b> ' + esc(o.label) + '</span><span class="hint">' + (o.kind === 'referrer' ? 'ผู้ชวนได้' : 'ลูกค้าใหม่ได้') + ' · ' + esc(o.steps) + (o.min_bill ? ' · ขั้นต่ำ ' + esc(o.min_bill) : '') + ' · ' + o.days + ' วัน</span></div>'; }).join('') + '<div class="hint">เปิด/ปิด หรือแก้จำนวนเงินได้ที่ชีต Offers คอลัมน์ active / steps (มีผลภายใน 1 นาที) · ลูกค้าที่ได้สิทธิ์ไปแล้วใช้กติกาเดิมจนหมดอายุ</div></div>' : '';
+    h += affV3(d);
     var cIds = d.coinsPending.filter(function (c) { return c.paid; }).map(function (c) { return c.id; });
-    h += '<div class="box"><h3>ส่วนลดสะสม (Coin) รออนุมัติ' + (mg ? pickAll('coin', cIds, 'เลือกที่จ่ายแล้วทั้งหมด') : '') + '</h3><div class="hint">ปล่อยได้เมื่อบิลของเพื่อนจ่ายแล้ว · ผู้ชวนใช้ลดบิลถัดไปได้เฉพาะสินค้าร่วมรายการ</div>' + (mg ? bulkBar('coin', [bulkBtn('coin', 'approveCoin', 'อนุมัติที่เลือก', picked('coin').length)]) : '') + (d.coinsPending.length ? (mg ? '<button class="btn sm blue" data-a="adm" data-op="approveCoins" style="margin:6px 0">อนุมัติทั้งหมดที่จ่ายแล้ว</button>' : '') + '<div class="tblw"><table><thead><tr>' + (mg ? '<th></th>' : '') + '<th>ผู้ชวน</th><th>จากบิลของ</th><th>บิล</th><th class="r">ยอดบิล</th><th class="r">Coin</th><th></th></tr></thead><tbody>' +
+    if (d.coinsPending.length || d.cfg.REF_REWARD !== 'points') h += '<div class="box"><h3>ส่วนลดสะสม (Coin) รออนุมัติ' + (d.cfg.REF_REWARD === 'points' ? ' · กติกาเดิมของเพื่อนที่ชวนก่อน v3' : '') + (mg ? pickAll('coin', cIds, 'เลือกที่จ่ายแล้วทั้งหมด') : '') + '</h3><div class="hint">ปล่อยได้เมื่อบิลของเพื่อนจ่ายแล้ว · ผู้ชวนใช้ลดบิลถัดไปได้เฉพาะสินค้าร่วมรายการ</div>' + (mg ? bulkBar('coin', [bulkBtn('coin', 'approveCoin', 'อนุมัติที่เลือก', picked('coin').length)]) : '') + (d.coinsPending.length ? (mg ? '<button class="btn sm blue" data-a="adm" data-op="approveCoins" style="margin:6px 0">อนุมัติทั้งหมดที่จ่ายแล้ว</button>' : '') + '<div class="tblw"><table><thead><tr>' + (mg ? '<th></th>' : '') + '<th>ผู้ชวน</th><th>จากบิลของ</th><th>บิล</th><th class="r">ยอดบิล</th><th class="r">Coin</th><th></th></tr></thead><tbody>' +
       d.coinsPending.map(function (c) { return '<tr>' + (mg ? '<td class="pick-cell">' + (c.paid ? pickBox('coin', c.id, c.owner) : '') + '</td>' : '') + '<td>' + esc(c.owner) + '</td><td>' + esc(c.from) + '</td><td class="mono">' + esc(c.order) + '</td><td class="r">' + baht(c.actual) + '</td><td class="r">' + fmt(c.amount) + '</td><td>' + (c.paid ? (mg ? '<button class="btn sm blue" data-a="adm" data-op="approveCoin" data-id="' + esc(c.id) + '">อนุมัติ</button>' : '<span class="pill paid">พร้อมอนุมัติ</span>') : '<span class="pill new">บิลยังไม่จ่าย</span>') + '</td></tr>'; }).join('') + '</tbody></table></div>' : '<div class="empty">ไม่มี</div>') + '</div>';
     h += '<div class="box"><h3>ผู้ชวน (' + (d.cfg.REF_SCOPE === 'all' ? 'เปิดทุกคน' : 'เฉพาะกลุ่มนำร่อง') + ')</h3>' + (d.referrers.length ? d.referrers.map(function (r) {
       return '<div class="ord"><div class="ord-h"><b>' + esc(r.name) + '</b><span class="mono hint">' + esc(r.sno) + '</span><span class="hint">ชวนแล้ว ' + r.refs + ' · ส่วนลดเดือนนี้ ' + baht(r.coinMonth) + ' · ใช้ได้ ' + baht(r.bal) + '</span></div>' +
@@ -413,7 +424,7 @@
     }).join('') + (mg ? '<form class="acts" data-form="createSign" style="margin-top:8px"><div class="field"><label>ชื่อจุดใหม่</label><input name="name" required></div><div class="field"><label>ประเภท</label><input name="type" placeholder="ร้านใต้คอนโด"></div><div class="field"><label>ที่ตั้ง</label><input name="area"></div><button class="btn sm" type="submit">สร้างป้ายใหม่</button></form>' : '') + '</div>';
     h += '<div class="box"><h3>Funnel 90 วัน: สแกน → ลงทะเบียน → บิลแรก → ซื้อซ้ำ</h3><div class="hint">นับการเปิดลิงก์จาก QR ป้ายและลิงก์ชวน (คนสแกน = ไม่ซ้ำกัน) · ใช้ดูว่าป้ายไหนคุ้ม และหยุดป้ายที่ไม่เกิดออเดอร์ใน 4–6 สัปดาห์</div>' +
       ((d.funnel || []).length ? '<div class="tblw"><table class="funnel-table"><thead><tr><th>แหล่งที่มา</th><th>สแกน</th><th>คนสแกน</th><th>ลงทะเบียน</th><th>บิลแรก</th><th>ซื้อซ้ำ</th><th>ยอดขาย</th></tr></thead><tbody>' + d.funnel.map(function (f) { return '<tr><td>' + (f.kind === 'sign' ? '<span class="pill appr">ป้าย</span> ' : '<span class="pill paid">ผู้ชวน</span> ') + esc(f.name) + ' <small class="mono hint">' + esc(f.ref) + '</small></td><td>' + f.scans + '</td><td>' + f.scanners + '</td><td>' + f.members + '</td><td>' + f.first + '</td><td>' + f.repeat + '</td><td>' + baht(f.sales) + '</td></tr>'; }).join('') + '</tbody></table></div>' : '<div class="empty">ยังไม่มีการสแกนหรือลงทะเบียนจากป้าย/ลิงก์ชวน</div>') + '</div>';
-    if (can('export')) h += '<div class="dl-row">' + [['coins', 'ส่วนลดสะสม'], ['shares', 'ส่วนแบ่งพาร์ทเนอร์'], ['funnel', 'Funnel']].map(function (k) { return '<button class="btn sm" data-a="admExport" data-k="' + k[0] + '" data-month="1">' + ic('dl') + ' ' + k[1] + ' เดือนนี้ .xlsx</button>'; }).join('') + (mg ? '<button class="btn sm" data-a="admExport" data-k="points" data-month="1">' + ic('dl') + ' ไฟล์แต้มรายเดือน (โอนเข้าระบบสมาชิก) .xlsx</button>' : '') + '</div>';
+    if (can('export')) h += '<div class="dl-row">' + [['coins', 'ส่วนลดสะสม'], ['shares', 'ส่วนแบ่งพาร์ทเนอร์'], ['funnel', 'Funnel']].map(function (k) { return '<button class="btn sm" data-a="admExport" data-k="' + k[0] + '" data-month="1">' + ic('dl') + ' ' + k[1] + ' เดือนนี้ .xlsx</button>'; }).join('') + (mg ? '<button class="btn sm" data-a="admExport" data-k="points" data-month="1">' + ic('dl') + ' ไฟล์แต้มรายเดือน (โอนเข้าระบบสมาชิก) .xlsx</button>' : '') + '<button class="btn sm" data-a="admExport" data-k="pointsLedger" data-month="1">' + ic('dl') + ' สมุดแต้มเดือนนี้ .xlsx</button><button class="btn sm" data-a="admExport" data-k="channels" data-all="1">' + ic('dl') + ' ช่องทางและ QR .xlsx</button></div>';
     return h;
   }
 
@@ -463,6 +474,7 @@
       var max = Math.max.apply(null, r.days.map(function (x) { return x.sales; }).concat([1]));
       h += '<div class="box"><h3>ยอดรายวัน</h3><div class="bars">' + r.days.map(function (x) { return '<div class="bar-row"><span>' + C.thDate(x.date) + '</span><div class="bar"><i style="width:' + (x.sales / max * 100) + '%"></i></div><b>' + baht(x.sales) + '</b><small>' + x.orders + ' บิล</small></div>'; }).join('') + '</div></div>';
     }
+    h += kpiBox(d) + areaBox(d);
     var at = r.attach || { by: { FS: {}, Consumer: {} }, bundles: [] }, tp = r.trips || {}, am = r.adminMin || {};
     h += '<div class="report-grid">' + [['Attach rate เซ็ต · ร้านอาหาร', (at.by.FS.rate || 0) + '%', (at.by.FS.withBundle || 0) + ' จาก ' + (at.by.FS.orders || 0) + ' ออเดอร์ · เป้า ≥15%'], ['Attach rate เซ็ต · ครัวเรือน', (at.by.Consumer.rate || 0) + '%', (at.by.Consumer.withBundle || 0) + ' จาก ' + (at.by.Consumer.orders || 0) + ' ออเดอร์'],
       ['เวลาสั่ง → เปิดบิล', am.avg === null || am.avg === undefined ? '–' : am.avg + ' นาที', 'เฉลี่ยจาก ' + (am.n || 0) + ' บิล (ใช้แทนเวลาแอดมินต่อออเดอร์)'], ['รอบส่ง/วัน', tp.perDay === null || tp.perDay === undefined ? '–' : tp.perDay, (tp.trips || 0) + ' รอบใน ' + (tp.tripDays || 0) + ' วันที่จดรอบ'],
@@ -480,7 +492,7 @@
     if (r.top.length) h += '<div class="box"><h3>สินค้าขายดี (ตามยอดในออเดอร์)' + (r.hasCost ? ' · GP จากแท็บ Costs' : '') + '</h3><div class="tblw"><table><thead><tr><th>SKU</th><th>สินค้า</th><th class="r">จำนวน</th><th class="r">ยอด</th>' + (r.hasCost ? '<th class="r">GP</th><th class="r">GP%</th>' : '') + '</tr></thead><tbody>' + r.top.map(function (x) { return '<tr><td class="mono">' + esc(x.sku) + '</td><td>' + esc(x.name) + '</td><td class="r">' + fmt(x.qty) + '</td><td class="r">' + baht(x.sales) + '</td>' + (r.hasCost ? '<td class="r">' + (x.gp === undefined ? '–' : baht(x.gp)) + '</td><td class="r">' + (x.gpPct === undefined ? '–' : x.gpPct + '%') + '</td>' : '') + '</tr>'; }).join('') + '</tbody></table></div></div>';
     if (at.bundles.length) h += '<div class="box"><h3>เซ็ตที่ขายได้</h3><div class="tblw"><table><thead><tr><th>เซ็ต</th><th class="r">จำนวน</th><th class="r">ยอด</th><th class="r">GP</th></tr></thead><tbody>' + at.bundles.map(function (b) { return '<tr><td>' + esc(b.name) + ' <small class="mono hint">' + esc(b.id) + '</small></td><td class="r">' + fmt(b.qty) + '</td><td class="r">' + baht(b.sales) + '</td><td class="r">' + (b.gp === undefined ? '–' : baht(b.gp) + ' (' + b.gpPct + '%)') + '</td></tr>'; }).join('') + '</tbody></table></div></div>';
     if ((r.cohort || []).length) h += '<div class="box"><h3>ลูกค้าใหม่กลับมาซื้อซ้ำ (cohort ตามเดือนที่ลงทะเบียน)</h3><div class="hint">% ของสมาชิกใหม่ที่มีบิลที่ 2 ภายใน 30/60/90/180 วันนับจากบิลแรก · เกณฑ์ทีม: ≥20–28% ใน 6 เดือน</div><div class="tblw"><table class="cohort-table"><thead><tr><th>เดือน</th><th>กลุ่ม</th><th>สมาชิกใหม่</th><th>มีบิลแรก</th><th>30 วัน</th><th>60 วัน</th><th>90 วัน</th><th>180 วัน</th></tr></thead><tbody>' + r.cohort.map(function (c) { return '<tr><td>' + esc(c.month) + '</td><td>' + esc(c.type) + ' <small class="hint">' + esc(Object.keys(c.src || {}).map(function (k) { return ({ ref: 'ชวน', sign: 'ป้าย', self: 'เอง', existing: 'เดิม' }[k] || k) + ' ' + c.src[k]; }).join(' ')) + '</small></td><td>' + c.n + '</td><td>' + c.first + '</td><td>' + c.d30Pct + '%</td><td>' + c.d60Pct + '%</td><td>' + c.d90Pct + '%</td><td>' + c.d180Pct + '%</td></tr>'; }).join('') + '</tbody></table></div></div>';
-    if (can('export')) h += '<div class="box"><h3>' + ic('dl') + ' ดาวน์โหลด Excel (.xlsx) ตามช่วงวันที่ด้านบน</h3><div class="dl-grid">' + [['orders', 'ออเดอร์'], ['lines', 'รายการสินค้าในออเดอร์'], ['payments', 'การชำระเงิน'], ['members', 'สมาชิกใหม่'], ['coins', 'ส่วนลดสะสม'], ['credits', 'เครดิต (โอนเกิน)'], ['shares', 'ส่วนแบ่งพาร์ทเนอร์'], ['trips', 'สมุดจดรอบส่ง'], ['funnel', 'Funnel ป้าย/ผู้ชวน']].concat(can('manage') ? [['audit', 'ประวัติการแก้ไข'], ['points', 'ไฟล์แต้มรายเดือน']] : [])
+    if (can('export')) h += '<div class="box"><h3>' + ic('dl') + ' ดาวน์โหลด Excel (.xlsx) ตามช่วงวันที่ด้านบน</h3><div class="dl-grid">' + [['orders', 'ออเดอร์'], ['lines', 'รายการสินค้าในออเดอร์'], ['payments', 'การชำระเงิน'], ['members', 'สมาชิกใหม่'], ['coins', 'ส่วนลดสะสม'], ['credits', 'เครดิต (โอนเกิน)'], ['shares', 'ส่วนแบ่งพาร์ทเนอร์'], ['trips', 'สมุดจดรอบส่ง'], ['funnel', 'Funnel ป้าย/ผู้ชวน'], ['kpi', 'KPI รายช่องทาง'], ['promo', 'การใช้โปร'], ['pointsLedger', 'สมุดแต้ม'], ['areaLog', 'ลูกค้านอกพื้นที่'], ['stock', 'สต็อกและ buffer'], ['channels', 'ช่องทางและ QR']].concat(can('manage') ? [['audit', 'ประวัติการแก้ไข'], ['points', 'ไฟล์แต้มรายเดือน']] : [])
       .map(function (k) { return '<button class="btn sm" data-a="admExport" data-k="' + k[0] + '">' + k[1] + '</button>'; }).join('') + '</div></div>';
     return h;
   }
@@ -490,7 +502,7 @@
   function adBc(d) {
     var q = d.quota || { used: 0, plan: 0 };
     var h = '<form class="box form" data-form="broadcast"><h3>บรอดแคสต์แบ่งกลุ่ม</h3><div class="field"><label>กลุ่ม</label><select name="segment">' + SEGS.map(function (s) { return '<option value="' + s[0] + '">' + s[1] + ' (' + ((d.segments || {})[s[0]] || 0) + ' คน)</option>'; }).join('') + '</select></div>' +
-      '<div class="field"><label>ข้อความ</label><select name="template"><option value="bundle">เซ็ตคุ้มเดือนนี้</option><option value="pom">สินค้าแห่งเดือน</option><option value="winback">ชวนกลับมาสั่ง</option></select></div><div class="hint">ทุกผู้รับใช้ 1 ข้อความในโควตา · ใช้ไปแล้ว ' + fmt(q.used) + ' / ' + (q.plan ? fmt(q.plan) : 'ไม่จำกัด') + (q.source === 'line' ? '' : ' (ประมาณ)') + ' · แพ็กเกจฟรีส่งเกินโควตาไม่ได้</div><button class="btn blue" type="submit">ส่ง</button></form>';
+      '<div class="field"><label>ข้อความ</label><select name="template"><option value="bundle">เซ็ตคุ้มเดือนนี้</option><option value="pom">สินค้าแห่งเดือน</option><option value="winback">ชวนกลับมาสั่ง</option>' + (d.cfg.SMART_ENABLED !== false ? '<option value="smart">Smart Set วันนี้ (ราคาลด 30% ถึง 23:59)</option>' : '') + '</select></div><div class="hint">ทุกผู้รับใช้ 1 ข้อความในโควตา · ใช้ไปแล้ว ' + fmt(q.used) + ' / ' + (q.plan ? fmt(q.plan) : 'ไม่จำกัด') + (q.source === 'line' ? '' : ' (ประมาณ)') + ' · แพ็กเกจฟรีส่งเกินโควตาไม่ได้</div><button class="btn blue" type="submit">ส่ง</button></form>';
     h += '<div class="box"><h3>ส่งแล้ว</h3>' + ((d.broadcasts || []).length ? d.broadcasts.map(function (b) { return '<div class="row"><span>' + esc(b.time) + ' · ' + esc(b.template) + ' · ' + esc(b.segment) + (b.by ? ' · ' + esc(b.by) : '') + '</span><span>' + b.n + ' คน</span></div>'; }).join('') : '<div class="hint">ยังไม่ได้ส่ง</div>') + '</div>';
     return h;
   }
@@ -520,14 +532,17 @@
     var t = d.tools || {}, jobs = t.jobs || {}, q = d.quota || {};
     function jobLine(k, label, btn) {
       var r = jobs[k];
-      return '<div class="job-row"><div><b>' + label + '</b><small class="hint">' + (r ? 'ล่าสุด ' + esc(r.at) + ' · ส่ง ' + (r.sent || 0) + ' ข้อความ' + (r.reason ? ' · ' + esc(r.reason) : '') : 'ยังไม่เคยรัน') + '</small></div><button class="btn sm" data-a="adm" data-op="runJob" data-job="' + k + '">' + btn + '</button></div>';
+      return '<div class="job-row"><div><b>' + label + '</b><small class="hint">' + (r ? 'ล่าสุด ' + esc(r.at) + ' · ' + jobText(r) : 'ยังไม่เคยรัน') + '</small></div><button class="btn sm" data-a="adm" data-op="runJob" data-job="' + k + '">' + btn + '</button></div>';
     }
     var h = '';
     if (S.me.staff && S.me.staff.role === 'manager' && t.testMode) h += '<div class="box test-box"><h3>' + ic('users') + ' ทดสอบบทบาท (เฉพาะผู้จัดการ + TEST_MODE)</h3><div class="hint">ดูหน้าจอและทำรายการได้เท่ากับบทบาทที่เลือก เพื่อทดสอบ/สอนงาน · หลังบ้านลดสิทธิ์ให้จริง (เพิ่มสิทธิ์ไม่ได้) · กลับได้จากแถบด้านบน</div><div class="acts" style="margin-top:8px">' +
       [['cashier', 'พนักงานร้าน'], ['driver', 'พนักงานส่งของ'], ['viewer', 'ดูอย่างเดียว']].map(function (x) { return '<button class="btn sm" data-a="admAsRole" data-p="' + x[0] + '">ดูเป็น ' + x[1] + '</button>'; }).join('') + '</div></div>';
     h += '<div class="box"><h3>ทดสอบงานตั้งเวลา (ไม่ต้องรอเวลาจริง)</h3>' + jobLine('reminders', '17:00 เตือนบิลค้างจ่าย + แจ้งออเดอร์รอรวมรอบ', 'ส่งเตือนตอนนี้') + jobLine('standing', '18:00 ถามสั่งประจำ', 'ส่งคำถามตอนนี้') + jobLine('summary', '19:00 สรุปยอดให้ผู้จัดการ', 'ส่งสรุปตอนนี้') + jobLine('winback', '10:00 เตือนซื้อซ้ำตามรอบของลูกค้า (เปิดที่ WINBACK_ENABLED)', 'ส่งตอนนี้') +
       jobLine('evening', (d.cfg.EVENING ? d.cfg.EVENING.cutoff : '16:00') + ' รอบเย็น: เลื่อนออเดอร์ที่ยังไม่จ่ายเป็นคืนถัดไป (ทำเองหลังเวลาปิดรับ)', 'ตรวจตอนนี้') + jobLine('archive', 'วันที่ 1 ของเดือน: ย้ายออเดอร์ที่จบแล้วเก่ากว่า ' + (d.cfg.ARCHIVE_DAYS || 120) + ' วัน ไปแท็บ OrdersArchive', 'ย้ายตอนนี้') +
-      (A.jobRes ? '<div class="alert ' + (A.jobRes.sent ? 'ok' : 'warn') + '"><b>ผล: ส่ง ' + (A.jobRes.sent || 0) + ' ข้อความ</b>' + (A.jobRes.reason ? '<br>' + esc(A.jobRes.reason) : '') + '</div>' : '') + '</div>';
+      jobLine('smartRotate', '00:00 เปลี่ยนชุด Smart Set วันนี้ (สุ่มใหม่ทันที)', 'สุ่มตอนนี้') + jobLine('pointsRelease', '00:00 ปล่อยแต้มที่พักครบ ' + d.cfg.QUALIFY_HOLD_DAYS + ' วัน', 'ปล่อยตอนนี้') + jobLine('magnetRemind', 'เตือนลูกค้าใหม่ที่ยังไม่ใช้ Magnet (เปิดที่ PUSH_EVENTS: magnetremind)', 'ส่งตอนนี้') +
+      jobLine('stock', (d.cfg.STOCK_REMIND || '19:30') + ' เตือนอัปโหลดไฟล์สต็อกปิดร้าน', 'ตรวจตอนนี้') + jobLine('stockCalib', 'คำนวณ buffer สต็อกใหม่ (หลังอัปโหลดไฟล์ปิดร้าน)', 'คำนวณตอนนี้') + jobLine('areaRetag', 'ตรวจพื้นที่ส่งของทุกที่อยู่ใหม่ (หลังแก้เส้นเขต/แถบขอบ)', 'ตรวจตอนนี้') +
+      (A.jobRes ? '<div class="alert ' + (A.jobRes.sent || A.jobRes.released || A.jobRes.changed || A.jobRes.products || A.jobRes.picks || A.jobRes.skus ? 'ok' : 'warn') + '"><b>ผล: ' + esc(jobText(A.jobRes)) + '</b></div>' : '') + '</div>';
+    h += areaTools(d) + uatBox(d);
     h += '<div class="box"><h3>ตรวจระบบ</h3><button class="btn sm" data-a="admSelfTest">ตรวจตอนนี้</button> <button class="btn sm" data-a="adm" data-op="cacheClear">ล้างแคช (หลังแก้ชีตด้วยมือ)</button>' +
       (A.selfTest ? '<div class="checks">' + A.selfTest.map(function (c) { return '<div class="row"><span>' + (c.ok ? '✅' : c.warn ? '⚠️' : '❌') + ' ' + esc(c.name) + '</span><span>' + esc(c.note) + '</span></div>'; }).join('') + '</div>' : '') +
       '<div class="hint">หลังบ้าน v' + esc(t.version || '') + ' · หน้าเว็บ v' + esc(C.version) + ' · LINE token ' + (t.tokenSet ? 'ตั้งแล้ว' : 'ยังไม่ได้ตั้ง') + ' · โควตาเดือนนี้ ' + fmt(q.used) + ' / ' + (q.plan ? fmt(q.plan) : 'ไม่จำกัด') + '</div>' +
@@ -555,6 +570,225 @@
       (rows.length ? '<div class="tblw"><table><thead><tr><th>คำสั่ง</th><th class="r">ครั้ง</th><th class="r">รอเฉลี่ย (ms)</th><th class="r">รอ 90% (ms)</th><th class="r">หลังบ้าน (ms)</th><th class="r">ไม่สำเร็จ*</th></tr></thead><tbody>' + rows.map(function (x) { return '<tr><td class="mono">' + esc(x.a) + '</td><td class="r">' + x.n + '</td><td class="r">' + fmt(x.avg) + '</td><td class="r">' + fmt(x.p90) + '</td><td class="r">' + fmt(x.srv) + '</td><td class="r">' + (x.bad || '') + '</td></tr>'; }).join('') + '</tbody></table></div><div class="hint">* รวมกรณีที่ระบบปฏิเสธตามกติกา เช่น เลข Transaction ซ้ำ</div>' : '<div class="hint">ใช้งานสักพักแล้วกลับมาดู</div>') + '</div>';
   }
 
+  /* ---------- v3: ตัวช่วยหน้าหลังร้าน ---------- */
+  var MST = { 'new': ['paid', 'ลูกค้าใหม่'], existing: ['', 'ลูกค้าเดิม'], review: ['new', 'รอตรวจ (อาจเป็นลูกค้าเดิม)'] };
+  function mstPill(st) { var x = MST[st]; return x ? '<span class="pill ' + x[0] + '">' + x[1] + '</span>' : ''; }
+  var AREA_TH = { 'in': ['paid', 'ในพื้นที่'], band: ['appr', 'แถบขอบ'], out: ['red', 'นอกพื้นที่'], none: ['new', 'ไม่มีหมุด'], grace: ['new', 'หมุดเดิม (ผ่อนผัน)'], exc: ['appr', 'ส่งพิเศษ'], off: ['', ''] };
+  function areaTag(st) { var x = AREA_TH[st]; return x && x[1] ? '<span class="pill ' + x[0] + '">' + x[1] + '</span>' : ''; }
+  var PK_TH = { earn: 'แต้มจากบิล', use: 'ใช้ลดบิล', refB2C: 'แนะนำลูกค้าบ้าน', refB2B1: 'แนะนำร้าน งวด 1', refB2B2: 'แนะนำร้าน งวด 2', adjust: 'ปรับโดยร้าน' };
+  var AEV_TH = { cart_out: 'เห็นการ์ดนอกพื้นที่ในตะกร้า', address_out: 'บันทึกที่อยู่นอกพื้นที่', address_band: 'บันทึกที่อยู่แถบขอบ', register_out: 'ลงทะเบียน (นอกพื้นที่)', order_block: 'สั่งส่งไม่ได้ (นอกพื้นที่/ไม่มีหมุด)' };
+  function mapLink(lat, lng, label) { return lat && lng ? '<a href="https://www.google.com/maps/search/?api=1&query=' + lat + ',' + lng + '" target="_blank" rel="noopener">' + (label || 'ดูแผนที่') + '</a>' : ''; }
+  /* สมาชิก: เครื่องมือ v3 ในแถวที่กด "แก้" */
+  function memberV3Tools(m, d) {
+    var mg = can('manage'), h = '<div class="mem-v3">';
+    h += '<div class="mem-v3-row"><b>สถานะลูกค้า:</b> ' + mstPill(m.status) + (m.channel ? ' <span class="pill">' + esc(m.channel) + '</span>' : '') + (m.magnet ? ' <span class="pill appr">Magnet ' + esc(m.magnet) + '</span>' : '') + (m.couponLock ? ' <span class="pill new">คูปองรอยืนยันร้าน</span>' : '') + (m.taxId ? ' · เลขภาษี <span class="mono">' + esc(m.taxId) + '</span>' : '') +
+      (m.shopPhoto ? ' <button class="btn sm" type="button" data-a="admShopPhoto" data-id="' + esc(m.id) + '">ดูรูปหน้าร้าน</button>' : '') +
+      (can('members') ? ' <button class="btn sm" data-a="adm" data-op="memberStatus" data-id="' + esc(m.id) + '" data-status="new" data-confirm="1">ตั้งเป็นลูกค้าใหม่ (ให้สิทธิ์)</button> <button class="btn sm" data-a="adm" data-op="memberStatus" data-id="' + esc(m.id) + '" data-status="existing" data-confirm="1">ตั้งเป็นลูกค้าเดิม</button>' : '') + '</div>';
+    h += '<div class="mem-v3-row"><b>ที่อยู่จัดส่ง:</b> ' + ((m.addresses || []).length ? m.addresses.map(function (a) { return esc(a.label) + (a.isDefault ? ' (หลัก)' : '') + ' ' + areaTag(a.exc ? 'exc' : a.area) + (a.distM ? ' <small class="hint">' + (Math.round(a.distM / 100) / 10) + ' กม.จากขอบ</small>' : '') + ' ' + mapLink(a.lat, a.lng); }).join(' · ') : '<span class="hint">ยังไม่มี</span>') + '</div>';
+    if (can('members')) h += '<form class="acts" data-form="addressStaff" data-id="' + esc(m.id) + '"><div class="field"><label>ปักหมุดให้ลูกค้า (วางลิงก์ Google Maps ที่ลูกค้าส่งในแชต หรือ lat,lng)</label><input name="geo" placeholder="https://maps.app.goo.gl/... หรือ 13.8001, 100.6492" autocomplete="off"></div><div class="field"><label>ที่อยู่ (ถ้าต้องการแก้)</label><input name="address" maxlength="200"></div><button class="btn sm blue" type="submit">บันทึกหมุด (ที่อยู่หลัก)</button></form>';
+    if (mg) h += '<form class="acts" data-form="memberArea" data-id="' + esc(m.id) + '"><label class="chk"><input type="checkbox" name="on"' + (m.areaExc ? ' checked' : '') + '><span>อนุญาตส่งนอกพื้นที่ (ทุกที่อยู่ของลูกค้านี้)</span></label><div class="field"><label>ถึงวันที่ (ว่าง = ไม่มีกำหนด)</label><input type="date" name="until"></div><div class="field"><label>เหตุผล</label><input name="note" maxlength="80" value="' + esc((m.areaExc || '').replace(/^ถึง \d{4}-\d{2}-\d{2} · /, '')) + '" placeholder="เช่น ลูกค้าประจำ ยอดสูง"></div><button class="btn sm" type="submit">บันทึก</button></form>';
+    if (mg && d.cfg.POINTS_ENABLED !== false) h += '<form class="acts" data-form="pointsAdjust" data-id="' + esc(m.id) + '"><div class="field" style="max-width:140px"><label>ปรับแต้ม (+/−)</label><input name="points" inputmode="numeric" required placeholder="เช่น 100 หรือ -50"></div><div class="field"><label>เหตุผล (บังคับ)</label><input name="note" required maxlength="120"></div><button class="btn sm" type="submit">ปรับแต้ม</button></form>' +
+      '<form class="acts" data-form="pointsReverse"><div class="field" style="max-width:200px"><label>หักแต้มคืนจากบิล (คืนสินค้า)</label><input name="id" class="mono" required placeholder="เลขออเดอร์ O2610..."></div><div class="field"><label>เหตุผล</label><input name="reason" required maxlength="80"></div><button class="btn sm bad" type="submit" >หักแต้มคืน</button></form>';
+    if (mg && d.cfg.TEST_MODE) h += '<div class="acts test-acts"><span class="hint">ทดสอบ (TEST_MODE):</span><button class="btn sm" data-a="adm" data-op="uatMember" data-id="' + esc(m.id) + '" data-what="magnet">คืนสิทธิ์ Magnet</button><button class="btn sm" data-a="adm" data-op="uatMember" data-id="' + esc(m.id) + '" data-what="new">ให้สิทธิ์ลูกค้าใหม่ใหม่ทั้งหมด</button><button class="btn sm bad" data-a="adm" data-op="uatMember" data-id="' + esc(m.id) + '" data-what="points" data-confirm="1">ล้างแต้มของสมาชิกนี้</button></div>';
+    return h + '</div>';
+  }
+  /* ชวนเพื่อน & ช่องทาง: แต้มผู้แนะนำ + QR ช่องทาง */
+  function affV3(d) {
+    var mg = can('manage'), pt = d.points || { review: [], referrers: [], totals: {} }, h = '';
+    if (pt.review.length || mg) {
+      var ids = pt.review.map(function (r) { return r.id; });
+      h += '<div class="box"><h3>แต้มผู้แนะนำ รอตรวจ (เกินเพดานเดือน) ' + (mg && ids.length ? pickAll('prv', ids) : '') + '</h3><div class="hint">ระบบพักไว้เมื่อผู้แนะนำได้แต้มเกินเพดาน (B2C ' + fmt(d.cfg.REF_CAP_B2C_MONTH) + ' แต้ม/เดือน · B2B ' + d.cfg.REF_CAP_B2B_MONTH + ' ร้าน/เดือน) · ตรวจว่าเป็นร้าน/ลูกค้าใหม่จริงก่อนอนุมัติ</div>' +
+        (mg ? bulkBar('prv', [bulkBtn('prv', 'pointsOk', 'อนุมัติ', picked('prv').length), bulkBtn('prv', 'pointsNo', 'ไม่อนุมัติ', picked('prv').length, { cls: 'bad', confirm: 1 })]) : '') +
+        (pt.review.length ? '<div class="tblw"><table><thead><tr>' + (mg ? '<th></th>' : '') + '<th>ผู้แนะนำ</th><th>รายการ</th><th class="r">แต้ม</th><th>เพื่อน</th><th>บิล</th><th></th></tr></thead><tbody>' + pt.review.map(function (r) { return '<tr>' + (mg ? '<td class="pick-cell">' + pickBox('prv', r.id, r.member) + '</td>' : '') + '<td>' + esc(r.member) + ' <small class="mono hint">' + esc(r.sno) + '</small></td><td>' + esc(PK_TH[r.kind] || r.kind) + '<br><small class="hint">' + esc(r.at.slice(0, 16)) + '</small></td><td class="r">' + fmt(r.points) + '</td><td>' + esc(r.from) + '</td><td class="mono">' + esc(r.order) + '</td><td>' + (mg ? '<button class="btn sm blue" data-a="adm" data-op="pointsReview" data-id="' + esc(r.id) + '" data-ok="1">อนุมัติ</button> <button class="btn sm bad" data-a="adm" data-op="pointsReview" data-id="' + esc(r.id) + '" data-ok="0" data-confirm="1">ไม่อนุมัติ</button>' : '') + '</td></tr>'; }).join('') + '</tbody></table></div>' : '<div class="empty">ไม่มีรายการรอตรวจ</div>') + '</div>';
+    }
+    var tt = pt.totals || {};
+    h += '<div class="box"><h3>ร้านผู้แนะนำ (แต้ม)</h3><div class="report-grid">' + [['แต้มจากบิล (ใช้ได้)', fmt(tt.earn || 0)], ['แต้มผู้แนะนำ (ใช้ได้)', fmt(tt.ref || 0)], ['พักไว้ ' + d.cfg.QUALIFY_HOLD_DAYS + ' วัน', fmt(tt.pending || 0)], ['ใช้ลดบิลแล้ว', fmt(tt.used || 0)], ['มูลค่าแต้มคงเหลือ', baht(tt.value || 0)]].map(function (x) { return '<div class="stat-card"><span>' + x[0] + '</span><strong>' + x[1] + '</strong></div>'; }).join('') + '</div>' +
+      ((pt.referrers || []).length ? '<div class="tblw" style="margin-top:8px"><table><thead><tr><th>ร้านผู้แนะนำ</th><th class="r">ลูกค้าบ้าน</th><th class="r">ร้านใหม่</th><th class="r">แต้มเดือนนี้</th><th class="r">ใช้ได้</th><th class="r">พักไว้</th><th class="r">รอตรวจ</th></tr></thead><tbody>' + pt.referrers.map(function (r) { return '<tr><td>' + esc(r.name) + ' <small class="mono hint">' + esc(r.sno) + '</small></td><td class="r">' + r.b2c + '</td><td class="r">' + r.b2b + '</td><td class="r">' + fmt(r.month) + '</td><td class="r">' + fmt(r.available) + '</td><td class="r">' + fmt(r.pending) + '</td><td class="r">' + fmt(r.review) + '</td></tr>'; }).join('') + '</tbody></table></div>' : '<div class="hint">ยังไม่มีผู้แนะนำที่ได้แต้ม</div>') + '</div>';
+    var ch = (d.channels || []).filter(function (c) { return hit(c, ['code', 'name', 'kindTh']); });
+    h += '<div class="box"><h3>ช่องทางและ QR (นับจาก QR แรกที่สแกน)</h3><div class="hint">ทุก QR/ลิงก์มีรหัสช่องทาง (ORGANIC / AFF-เลขสมาชิก / PARTNER-ป้าย / BOOTH) · ลูกค้าที่สแกนหลายช่องทาง นับช่องทางแรกที่สแกน · ใช้ดูว่าช่องทางไหนได้ลูกค้าใหม่จริง</div>' + searchBox('ค้นหารหัส / ชื่อช่องทาง') +
+      '<div class="tblw" style="margin-top:6px"><table><thead><tr><th>ช่องทาง</th><th class="r">สแกน</th><th class="r">คนสแกน</th><th class="r">ลงทะเบียน</th><th class="r">ใหม่ / เดิม / รอตรวจ</th><th class="r">บิลแรก</th><th></th></tr></thead><tbody>' + ch.map(function (c) {
+        return '<tr class="' + (c.active ? '' : 'off') + '"><td><span class="pill">' + esc(c.kindTh) + '</span> ' + esc(c.name) + '<br><small class="mono hint">' + esc(c.code) + (c.note ? ' · ' + esc(c.note) : '') + (c.active ? '' : ' · ปิดอยู่') + '</small></td><td class="r">' + c.scans + '</td><td class="r">' + c.scanners + '</td><td class="r">' + c.signups + '</td><td class="r">' + c.newC + ' / ' + c.existing + ' / ' + c.review + '</td><td class="r">' + c.first + '</td><td style="white-space:nowrap">' +
+          (c.link ? '<button class="btn sm" data-a="admQR" data-t="' + esc(c.link) + '" data-n="' + esc(c.name + ' · ' + c.code) + '">QR</button> <button class="btn sm" data-a="copy" data-t="' + esc(c.link) + '">ลิงก์</button>' : '') + (mg && /^(ORGANIC|BOOTH)/.test(c.code) && c.link ? ' <button class="btn sm" data-a="admChan" data-code="' + esc(c.code) + '" data-name="' + esc(c.name) + '" data-on="' + (c.active ? '0' : '1') + '">' + (c.active ? 'ปิด' : 'เปิด') + '</button>' : '') + '</td></tr>';
+      }).join('') + '</tbody></table></div>' +
+      (mg ? '<form class="acts" data-form="channelSave" style="margin-top:8px"><div class="field"><label>รหัสช่องทางใหม่ (ORGANIC-… หรือ BOOTH-…)</label><input name="code" required class="mono" placeholder="เช่น ORGANIC-POS หรือ BOOTH-ตลาดนัด" maxlength="40"></div><div class="field"><label>ชื่อเรียก</label><input name="name" maxlength="60" placeholder="เช่น ป้ายหน้าแคชเชียร์"></div><div class="field"><label>หมายเหตุ</label><input name="note" maxlength="120"></div><button class="btn sm blue" type="submit">สร้างช่องทาง + QR</button></form><div class="hint">BOOTH (บูธนอกร้าน) สร้างไว้ได้ แต่ยังพักโครงการ (HOLD) · ปิดไว้ก่อนจนกว่าจะเริ่ม</div>' : '') + '</div>';
+    return h;
+  }
+  /* รายงาน: KPI รายช่องทาง + ลูกค้านอกพื้นที่ */
+  function kpiBox(d) {
+    var k = d.kpi; if (!k) return '';
+    var t = k.totals || {}, h = '<div class="box"><h3>' + ic('chart') + ' KPI ลูกค้าใหม่ & โปร (ช่วงวันที่ด้านบน)</h3><div class="report-grid">' + [
+      ['ลูกค้าใหม่ (สิทธิ์ใหม่)', fmt(t.newC || 0), 'ลงทะเบียนทั้งหมด ' + fmt(t.signups || 0) + ' · เดิม ' + (t.existing || 0) + ' · รอตรวจ ' + (t.review || 0)],
+      ['ซื้อครั้งแรกใน 14 วัน', (k.conv14 || 0) + '%', fmt(t.first14 || 0) + ' จาก ' + fmt(t.newC || 0) + ' คน'], ['ใช้สิทธิ์ Magnet', (k.magnetRate || 0) + '%', fmt(t.magnetUsed || 0) + ' คน'],
+      ['บิลที่ใช้ Smart Set', (k.smartAttach || 0) + '%', fmt(t.smartOrders || 0) + ' จาก ' + fmt(t.orders || 0) + ' บิล'], ['ร้านใหม่ซื้อซ้ำ (B2B)', (k.b2bRate || 0) + '%', (k.b2b || {}).retained + ' จาก ' + (k.b2b || {}).withFirst + ' ร้าน · ซื้อสะสม ≥ ' + baht(d.cfg.B2B_RETAIN_SPEND) + ' ใน ' + d.cfg.B2B_RETAIN_DAYS + ' วัน'],
+      ['ลูกค้าซื้อ ≥ 3 บิล', (k.retentionRate || 0) + '%', (k.retention || {}).third + ' จาก ' + (k.retention || {}).first + ' คน'], ['ยอดขาย (เปิดบิลแล้ว)', baht(t.revenue || 0), fmt(t.orders || 0) + ' บิล'],
+      ['ต้นทุนโปรแกรม', baht(t.programCost || 0), 'คูปอง ' + baht(t.couponCost || 0) + ' · แต้มที่ใช้ ' + baht(t.pointsCost || 0) + ' · แต้มผู้แนะนำ ' + baht(t.refPointsCost || 0)], ['ส่วนลด Smart/Magnet', baht(t.promoCost || 0), 'ลดในบิล (ไม่รวมคูปอง)']]
+      .map(function (x) { return '<div class="stat-card"><span>' + x[0] + '</span><strong>' + x[1] + '</strong><small class="hint">' + esc(x[2]) + '</small></div>'; }).join('') + '</div>';
+    if (k.pilotStart) h += '<div class="hint" style="margin-top:8px">Pilot เริ่ม ' + esc(C.thDate(k.pilotStart)) + ' · เกณฑ์ไปต่อ: ลูกค้าใหม่ ≥ ' + k.stopNew + ' คน ภายในสัปดาห์ที่ 6 · ตอนนี้ ' + (k.newSoFar || 0) + ' คน ' + ((k.newSoFar || 0) >= k.stopNew ? '<span class="pill paid">ผ่านเกณฑ์</span>' : '<span class="pill new">ยังไม่ถึง</span>') + '</div>' +
+      ((k.weeks || []).length ? '<div class="bars" style="margin-top:6px">' + k.weeks.map(function (w) { var mx = Math.max.apply(null, k.weeks.map(function (x) { return x.newC; }).concat([1])); return '<div class="bar-row"><span>สัปดาห์ ' + w.week + '</span><div class="bar"><i style="width:' + (w.newC / mx * 100) + '%"></i></div><b>' + w.newC + ' คน</b><small>' + C.thDate(w.from) + '–' + C.thDate(w.to) + '</small></div>'; }).join('') + '</div>' : '');
+    else h += '<div class="hint" style="margin-top:8px">ใส่วันเริ่ม Pilot ที่ชีต Config แถว PILOT_START (เช่น 2026-11-02) เพื่อดูยอดรายสัปดาห์เทียบเกณฑ์ไปต่อ</div>';
+    h += (k.channels || []).length ? '<div class="tblw" style="margin-top:8px"><table><thead><tr><th>ช่องทาง</th><th class="r">สแกน</th><th class="r">ลงทะเบียน</th><th class="r">ใหม่</th><th class="r">ซื้อใน 14 วัน</th><th class="r">ใช้ Magnet</th><th class="r">บิล</th><th class="r">ยอดขาย</th></tr></thead><tbody>' + k.channels.map(function (c) { return '<tr><td class="mono">' + esc(c.code) + '</td><td class="r">' + c.scans + '</td><td class="r">' + c.signups + '</td><td class="r">' + c.newC + '</td><td class="r">' + c.first14 + ' (' + c.conv + '%)</td><td class="r">' + c.magnetUsed + ' (' + c.magnetRate + '%)</td><td class="r">' + c.orders + '</td><td class="r">' + baht(c.revenue) + '</td></tr>'; }).join('') + '</tbody></table></div>' : '';
+    if ((k.referrers || []).length) h += '<h3 style="margin-top:12px">ร้านผู้แนะนำ: ลูกค้าที่พามา + ยอดของร้านเอง</h3><div class="hint">ยอดของร้านเองเดือนนี้ต่ำกว่าค่าเฉลี่ยเดิมมาก = ควรคุยกับร้าน (อาจย้ายยอดไปเปิดบัญชีใหม่)</div><div class="tblw"><table><thead><tr><th>ร้าน</th><th class="r">บ้าน</th><th class="r">ร้าน</th><th class="r">บิลแรกแล้ว</th><th class="r">แต้ม</th><th class="r">ยอดร้านเองเดือนนี้</th><th class="r">ค่าเฉลี่ยเดิม</th></tr></thead><tbody>' + k.referrers.map(function (r) { var low = r.avg > 0 && r.own < r.avg * 0.5; return '<tr class="' + (low ? 'warn' : '') + '"><td>' + esc(r.name) + ' <small class="mono hint">' + esc(r.sno) + '</small></td><td class="r">' + r.b2c + '</td><td class="r">' + r.b2b + '</td><td class="r">' + r.first + '</td><td class="r">' + fmt(r.points) + '</td><td class="r">' + baht(r.own) + (low ? ' ⚠' : '') + '</td><td class="r">' + (r.avg ? baht(r.avg) : '–') + '</td></tr>'; }).join('') + '</tbody></table></div>';
+    return h + '</div>';
+  }
+  function areaBox(d) {
+    var a = d.area; if (!a) return '';
+    var h = '<div class="box"><h3>' + ic('map') + ' ลูกค้านอกพื้นที่ (ใช้ดูโอกาสขยายเขต / เปิดสาขา)</h3><div class="hint">เก็บพิกัดแบบหยาบ (ทศนิยม 3 ตำแหน่ง ≈ 100 ม.) ไม่ผูกชื่อลูกค้า · เก็บ ' + (d.cfg.AREA_LOG_DAYS || 180) + ' วัน</div>';
+    if (!a.total) return h + '<div class="empty">ยังไม่มีบันทึกในช่วงนี้</div></div>';
+    h += '<div class="row-flex" style="flex-wrap:wrap;gap:6px;margin:8px 0">' + Object.keys(a.byEvent).map(function (e) { return '<span class="pill">' + esc(AEV_TH[e] || e) + ' ' + a.byEvent[e] + '</span>'; }).join('') + '</div>';
+    var wd = ['จันทร์', 'อังคาร', 'พุธ', 'พฤหัสฯ', 'ศุกร์', 'เสาร์', 'อาทิตย์'].filter(function (x) { return a.byWeekday[x]; }), mx = Math.max.apply(null, wd.map(function (x) { return a.byWeekday[x]; }).concat([1]));
+    if (wd.length) h += '<div class="bars">' + wd.map(function (x) { return '<div class="bar-row"><span>' + x + '</span><div class="bar"><i style="width:' + (a.byWeekday[x] / mx * 100) + '%"></i></div><b>' + a.byWeekday[x] + '</b><small>ครั้ง</small></div>'; }).join('') + '</div>';
+    h += '<div class="tblw" style="margin-top:8px"><table><thead><tr><th>เวลา</th><th>เหตุการณ์</th><th class="r">ห่างจากขอบ</th><th class="r">ยอดตะกร้า</th><th>ผล</th><th>ตำแหน่ง</th></tr></thead><tbody>' + a.rows.map(function (r) { return '<tr><td>' + esc(r.time) + '</td><td>' + esc(AEV_TH[r.event] || r.event) + '</td><td class="r">' + (r.distM ? (Math.round(r.distM / 100) / 10) + ' กม.' : '–') + '</td><td class="r">' + (r.cart ? baht(r.cart) : '–') + '</td><td>' + esc(r.outcome) + '</td><td>' + mapLink(r.lat, r.lng, '≈ ดู') + '</td></tr>'; }).join('') + '</tbody></table></div>';
+    return h + '</div>';
+  }
+  /* เครื่องมือ: พื้นที่จัดส่ง (แถบขอบแก้ได้) + พรีวิวเส้นเขต */
+  function areaSvg(ac, band) {
+    var poly = (ac.poly || []).map(function (p) { return [Number(p[0]), Number(p[1])]; }); if (poly.length < 3) return '<div class="hint">ยังไม่มีเส้นเขต (แท็บ Area ในชีต)</div>';
+    var o = [0, 0]; poly.forEach(function (p) { o[0] += p[0]; o[1] += p[1]; }); o[0] /= poly.length; o[1] /= poly.length;
+    var xy = function (la, ln) { return [(ln - o[1]) * 111320 * Math.cos(o[0] * Math.PI / 180), -(la - o[0]) * 110574]; };
+    var P = poly.map(function (p) { return xy(p[0], p[1]); }), sh = ac.shop && Number(ac.shop[0]) ? xy(Number(ac.shop[0]), Number(ac.shop[1])) : null, b = Number(band) || 0;
+    var xs = P.map(function (p) { return p[0]; }), ys = P.map(function (p) { return p[1]; }), pad = b + 300;
+    var minX = Math.min.apply(null, xs) - pad, maxX = Math.max.apply(null, xs) + pad, minY = Math.min.apply(null, ys) - pad, maxY = Math.max.apply(null, ys) + pad, W = 320, k = W / (maxX - minX), H = Math.round((maxY - minY) * k);
+    var pt = function (p) { return ((p[0] - minX) * k).toFixed(1) + ',' + ((p[1] - minY) * k).toFixed(1); }, path = 'M' + P.map(pt).join('L') + 'Z';
+    return '<svg class="area-svg" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="พรีวิวเส้นเขตจัดส่ง และแถบขอบ ' + b + ' เมตร">' + (b > 0 ? '<path d="' + path + '" fill="none" stroke="#7FB8D4" stroke-opacity=".45" stroke-width="' + (2 * b * k).toFixed(1) + '" stroke-linejoin="round"/>' : '') +
+      '<path d="' + path + '" fill="#00845F" fill-opacity=".14" stroke="#006B4E" stroke-width="2"/>' + (sh ? '<circle cx="' + ((sh[0] - minX) * k).toFixed(1) + '" cy="' + ((sh[1] - minY) * k).toFixed(1) + '" r="5" fill="#C2410C"/><text x="' + ((sh[0] - minX) * k + 8).toFixed(1) + '" y="' + ((sh[1] - minY) * k + 4).toFixed(1) + '" font-size="11" fill="currentColor">ร้าน</text>' : '') +
+      '<line x1="10" y1="' + (H - 10) + '" x2="' + (10 + 1000 * k).toFixed(1) + '" y2="' + (H - 10) + '" stroke="currentColor" stroke-width="2"/><text x="10" y="' + (H - 14) + '" font-size="10" fill="currentColor">1 กม.</text></svg>';
+  }
+  function areaTools(d) {
+    var ac = d.areaCfg; if (!ac) return '';
+    var band = A.bandDraft !== undefined ? A.bandDraft : ac.band, by = ac.byArea || {};
+    return '<div class="box"><h3>' + ic('map') + ' พื้นที่จัดส่ง</h3>' + cfgToggle('AREA_ENABLED', ac.enabled, 'ตรวจพื้นที่ส่งตอนสั่งแบบส่งถึงที่ (เส้นเขต ' + (ac.poly || []).length + ' จุด)') +
+      '<div class="area-tools"><div>' + areaSvg(ac, band) + '<div class="hint">เขียว = ในเขต · ฟ้า = แถบขอบที่ยังส่งได้ (' + fmt(band) + ' ม.) · จุดส้ม = ร้าน</div></div><div>' +
+      '<form class="form" data-form="areaBand"><div class="field"><label for="ab-band">แถบขอบ (เมตร) · 0–5,000</label><input id="ab-band" name="band" type="number" min="0" max="5000" step="50" value="' + band + '" data-chg="admBand"></div><button class="btn sm blue" type="submit">บันทึกแถบขอบ</button><div class="hint">บันทึกแล้วระบบตรวจทุกที่อยู่ใหม่ทันที</div></form>' +
+      '<form class="form" data-form="areaGrace" style="margin-top:12px"><div class="field"><label for="ab-grace">ผ่อนผันลูกค้าเดิม (หมุดเดิม/ไม่มีหมุด) ถึงวันที่</label><input id="ab-grace" name="grace" type="date" value="' + esc(ac.grace || '') + '"></div><button class="btn sm" type="submit">บันทึก</button><div class="hint">ระหว่างนี้ลูกค้าที่ยังไม่ปักหมุดใหม่ ยังสั่งส่งได้ตามเดิม · ว่าง = ไม่ผ่อนผัน</div></form>' +
+      '<div class="row" style="margin-top:10px"><span>ที่อยู่ทั้งหมด</span><span>' + fmt(ac.addresses || 0) + '</span></div>' + ['in', 'band', 'out', 'none'].map(function (k) { return '<div class="row"><span>' + areaTag(k) + '</span><span>' + fmt(by[k] || 0) + '</span></div>'; }).join('') +
+      '<button class="btn sm" data-a="adm" data-op="runJob" data-job="areaRetag" style="margin-top:6px">ตรวจพื้นที่ทุกที่อยู่ตอนนี้</button></div></div>' +
+      '<div class="hint">แก้จุดเส้นเขตได้ที่แท็บ Area ในชีต (lat, lng เรียงตามขอบ) · สาขาอื่นสำหรับแนะนำลูกค้านอกเขตที่แท็บ Branches</div></div>';
+  }
+  function uatBox(d) {
+    if (!d.cfg.TEST_MODE || !d.uat) return '';
+    return '<form class="box test-box uat-box" data-form="uatReset"><h3>' + ic('lock') + ' รีเซ็ตข้อมูลเพื่อทดสอบ (UAT) · เฉพาะ TEST_MODE</h3><div class="alert warn">ก่อนกด: ทำสำเนา Google Sheet ไว้ก่อนเสมอ (ไฟล์ → ทำสำเนา) · ไม่แตะ Config / สินค้า / ราคา / เซ็ต / ทีมงาน / กติกา / ช่องทาง / เส้นเขต</div>' +
+      d.uat.scopes.map(function (s) { return '<label class="chk"><input type="checkbox" name="scope" value="' + esc(s.id) + '"><span><b>' + esc(s.label) + '</b> <small class="mono hint">' + esc(s.id) + '</small></span></label>'; }).join('') +
+      '<div class="field" style="margin-top:10px;max-width:260px"><label for="uat-confirm">พิมพ์ RESET เพื่อยืนยัน</label><input id="uat-confirm" name="confirm" autocomplete="off" class="mono" placeholder="RESET"></div><button class="btn bad" type="submit" style="margin-top:8px">ล้างข้อมูลที่เลือก</button>' +
+      '<div class="hint" style="margin-top:8px">"สมาชิกที่ลงทะเบียนระหว่างทดสอบ" = ลบสมาชิกที่สมัครผ่าน LINE · ลูกค้าเดิมจากไฟล์ยังอยู่ แต่ถอดการผูก LINE · หลังล้าง ให้ทุกคนปิด/เปิด MINI App ใหม่</div>' +
+      '<div class="acts" style="margin-top:10px"><button class="btn sm" type="button" data-a="adm" data-op="runJob" data-job="demoPromo">ใส่ข้อมูลโปรตัวอย่าง (P001–P014)</button><button class="btn sm" type="button" data-a="adm" data-op="runJob" data-job="pointsRelease" data-all="1">ปล่อยแต้มที่พักไว้ทั้งหมดทันที</button></div></form>';
+  }
+  /* ---------- v3: โปร Smart Set / Magnet Set ---------- */
+  var PCAT_TH = { Main: 'สินค้าหลัก', 'Co-product': 'ผลพลอยได้', Offal: 'เครื่องใน', Trading: 'สินค้าซื้อมาขายไป', Marinated: 'หมัก/ปรุงรส', Process: 'แปรรูป', Chicken: 'ไก่', Egg: 'ไข่' };
+  function onOff(v) { return v ? '<span class="pill paid">เปิด</span>' : '<span class="pill">ปิด</span>'; }
+  function cfgToggle(key, on, label) { return can('manage') ? '<label class="chk cfg-toggle"><input type="checkbox" data-chg="admCfg" data-k="' + key + '"' + (on ? ' checked' : '') + '><span>' + label + '</span></label>' : '<div class="row"><span>' + label + '</span><span>' + onOff(on) + '</span></div>'; }
+  function adPromo(d) {
+    var P = d.promo || {}, st = P.settings || {}, mg = can('manage'), cfg = d.cfg || {}, u = P.usage || {}, f = P.magnetFunnel || {}, ed = A.promoEdit || {};
+    var cats = (P.catsAll || []).map(function (c) { return c.id; }), catTh = {}; (P.catsAll || []).forEach(function (c) { catTh[c.id] = c.th; });
+    var h = rangeBar([['promo', 'การใช้โปร']]);
+    h += '<div class="report-grid">' + [['บิลที่ใช้ Smart Set', fmt(u.smart || 0), 'Attach ' + (u.attach || 0) + '% จาก ' + fmt(u.orders || 0) + ' บิล · ' + fmt(u.smartUnits || 0) + ' ชิ้น'], ['ส่วนลด Smart Set', baht(u.smartDisc || 0), 'ช่วงวันที่ด้านบน'], ['บิลที่ใช้ Magnet', fmt(u.magnet || 0), 'ส่วนลด ' + baht(u.magnetDisc || 0)],
+      ['สิทธิ์ Magnet', fmt(f.granted || 0) + ' คน', 'ใช้แล้ว ' + (f.used || 0) + ' · จองอยู่ ' + (f.reserved || 0) + ' · ยังไม่ใช้ ' + (f.available || 0) + ' · หมดอายุ ' + (f.expired || 0)], ['คูปอง Affiliate', baht(u.coupon || 0), 'ส่วนลดคูปองลูกค้าใหม่'], ['แต้มที่ใช้ลดบิล', baht(u.points || 0), '']]
+      .map(function (x) { return '<div class="stat-card"><span>' + x[0] + '</span><strong>' + x[1] + '</strong><small class="hint">' + esc(x[2]) + '</small></div>'; }).join('') + '</div>';
+    h += '<div class="box"><h3>ตั้งค่าโปร</h3>' + cfgToggle('SMART_ENABLED', st.smart, 'Smart Set (ซื้อสินค้าหลักทุก ' + st.trigger + ' กก. = ลด ' + st.smartPct + '% 1 ชิ้น · ชิ้นละไม่เกิน ' + st.maxKg + ' กก.)') + cfgToggle('MAGNET_ENABLED', st.magnet, 'Magnet Set ลูกค้าใหม่ (ลด ' + st.magnetPct + '% สูงสุด ' + baht(st.cap) + ' · ยอดหลังหัก ≥ ' + baht(st.minNet) + ' · ใช้ได้ภายใน ' + st.expiry + ' วัน)') + cfgToggle('POINTS_ENABLED', cfg.POINTS_ENABLED !== false, 'แต้มสะสม (฿' + cfg.POINT_EARN_SPEND + ' = 1 แต้ม · ' + cfg.POINT_REDEEM_UNIT + ' แต้ม = ฿' + cfg.POINT_REDEEM_VALUE + ')') +
+      (mg ? '<div class="field" style="margin-top:10px;max-width:420px"><label>สินค้าที่ใช้สิทธิ์ Smart ได้</label><select data-chg="admCfgSel" data-k="SMART_SCOPE"><option value="POOL"' + (st.scope !== 'FEATURED' ? ' selected' : '') + '>ทุกสินค้าที่ติ๊ก Smart (POOL · แนะนำ)</option><option value="FEATURED"' + (st.scope === 'FEATURED' ? ' selected' : '') + '>เฉพาะ 6 รายการของวัน (FEATURED)</option></select></div>' : '<div class="row"><span>สินค้าที่ใช้สิทธิ์ Smart ได้</span><span>' + esc(st.scope) + '</span></div>') +
+      '<div class="hint">1 บิลใช้ได้ 1 โปร (ระบบเลือกแบบที่ลดมากกว่า ลูกค้าเปลี่ยนได้) · คูปอง Affiliate ใช้ร่วมได้ · เกณฑ์ GP ขั้นต่ำ ' + st.gpMin + '% · ตัวเลข % / เพดาน / ขั้นต่ำ แก้ที่ชีต Config (SMART_* / MAGNET_* / POINT_*) มีผลภายใน 1 นาที</div></div>';
+    h += '<div class="box"><div class="section-heading"><h3>Smart Set วันนี้ (' + esc(C.thDate(today())) + ')</h3>' + (mg ? '<button class="btn sm" data-a="adm" data-op="runJob" data-job="smartRotate" data-confirm="1">สุ่มชุดวันนี้ใหม่</button>' : '') + '</div>' +
+      ((P.today || []).length ? '<div class="tblw"><table><thead><tr><th>หมวด</th><th>สินค้า</th><th class="r">ราคาเต็ม</th><th class="r">ราคาลด</th><th>เลือกโดย</th></tr></thead><tbody>' + P.today.map(function (x) { return '<tr><td>' + esc(catTh[x.cat] || x.cat) + '</td><td>' + esc(x.name) + ' <small class="mono hint">' + esc(x.sku) + '</small></td><td class="r">' + baht(x.full) + '</td><td class="r">' + baht(C.promoPrice(x.full, st.smartPct)) + '</td><td>' + esc(x.by || 'ระบบ') + '</td></tr>'; }).join('') + '</tbody></table></div>' : '<div class="empty">ยังไม่มีชุดของวันนี้ · ติ๊กสินค้าเข้า Smart Set ในตารางด้านล่าง แล้วกด "สุ่มชุดวันนี้ใหม่"</div>') +
+      '<div class="hint">ระบบเปลี่ยนชุดทุก 00:00 · 1 หมวด 1 รายการ (' + esc((st.cats || []).map(function (c) { return catTh[c] || c; }).join(' · ')) + ') · เลือกจากคะแนน GP ' + Math.round((cfg.SMART_W_GP || 0.7) * 100) + '% + ยอดขาย 30 วัน และไม่ซ้ำรายการเดิมติดกัน</div></div>';
+    if ((P.tomorrow || []).length || mg) {
+      h += '<div class="box"><h3>ชุดของพรุ่งนี้ (' + esc(C.thDate(P.tomorrowDate)) + ') · ล็อกเองได้</h3><div class="tblw"><table><thead><tr><th>หมวด</th><th>ระบบจะเลือก</th>' + (mg ? '<th>ล็อกรายการ</th>' : '') + '</tr></thead><tbody>' + (st.cats || []).map(function (cat) {
+        var pick = (P.tomorrow || []).filter(function (x) { return x.cat === cat; })[0], opts = (P.pool || []).filter(function (p) { return p.smart && p.promoCat === cat && p.okSmart; });
+        return '<tr><td>' + esc(catTh[cat] || cat) + '</td><td>' + (pick ? esc(pick.name) + (pick.by ? ' <span class="pill appr">ล็อกโดย ' + esc(pick.by) + '</span>' : '') : '<span class="hint">ไม่มีสินค้าในหมวดนี้</span>') + '</td>' +
+          (mg ? '<td><select data-chg="admSmartPick" data-cat="' + esc(cat) + '" data-date="' + esc(P.tomorrowDate) + '" aria-label="ล็อกรายการหมวด ' + esc(catTh[cat] || cat) + '"><option value="">ให้ระบบเลือก</option>' + opts.map(function (p) { return '<option value="' + esc(p.sku) + '"' + (pick && pick.by && pick.sku === p.sku ? ' selected' : '') + '>' + esc(p.name) + '</option>'; }).join('') + '</select></td>' : '') + '</tr>';
+      }).join('') + '</tbody></table></div></div>';
+    }
+    var pool = (P.pool || []).filter(function (p) { return hit(p, ['sku', 'name', 'promoCat']); }), nEd = Object.keys(ed).length;
+    h += '<div class="box"><div class="section-heading"><h3>รายการสินค้าโปร (Pool)</h3>' + (mg && nEd ? '<button class="btn sm blue" data-a="admPromoSave">บันทึก ' + nEd + ' รายการ</button>' : '') + '</div>' +
+      '<div class="hint">ติ๊ก <b>Smart</b> = ลด ' + st.smartPct + '% เมื่อมีสิทธิ์ · <b>Magnet</b> = ลดในสิทธิ์ลูกค้าใหม่ · หมวด <b>สินค้าหลัก</b> = นับน้ำหนักเป็นสิทธิ์ · GP ไม่เกิน ' + st.gpMin + '% ใส่โปรไม่ได้ · ชิ้นหนักเกิน ' + st.maxKg + ' กก. เป็น Smart ไม่ได้ · ยังไม่มีต้นทุน (แท็บ Costs) = ตรวจ GP ไม่ได้</div>' +
+      (mg ? '<div class="acts" style="margin:8px 0"><label class="btn sm"><input type="file" accept=".xlsx,.csv" hidden data-chg="admPoolFile">' + ic('dl') + ' อัปโหลดไฟล์ Pool (.xlsx: sku, promo_cat, smart, magnet)</label><button class="btn sm" data-a="admPoolTpl">' + ic('dl') + ' ดาวน์โหลด Pool ปัจจุบัน</button></div>' : '') +
+      searchBox('ค้นหา SKU / ชื่อ / หมวด') + '<div class="tblw" style="margin-top:6px"><table class="promo-table"><thead><tr><th>SKU</th><th>สินค้า</th><th class="r">กก./ชิ้น</th><th class="r">ราคา</th><th class="r">GP%</th><th class="r">ขาย 30 วัน</th><th>หมวดโปร</th><th>Smart</th><th>Magnet</th><th>หมายเหตุ</th></tr></thead><tbody>' + pool.map(function (p) {
+        var e = ed[p.sku] || {}, cat = e.promoCat !== undefined ? e.promoCat : p.promoCat, sm = e.smart !== undefined ? e.smart : p.smart, mgn = e.magnet !== undefined ? e.magnet : p.magnet, dirty = !!ed[p.sku];
+        return '<tr class="' + (dirty ? 'dirty' : '') + (p.why ? ' warn' : '') + '"><td class="mono">' + esc(p.sku) + '</td><td>' + esc(p.name) + (p.inStock ? '' : ' <span class="pill red">หมด</span>') + '</td><td class="r">' + fmt(p.kg) + '</td><td class="r">' + baht(p.price) + '</td><td class="r">' + (p.gp === null ? '<span class="hint">–</span>' : p.gp + '%') + '</td><td class="r">' + fmt(p.mov) + '</td>' +
+          '<td>' + (mg ? '<select data-chg="admPromoEdit" data-sku="' + esc(p.sku) + '" data-f="promoCat" aria-label="หมวดโปร ' + esc(p.name) + '"><option value="">—</option>' + cats.map(function (c) { return '<option value="' + esc(c) + '"' + (c === cat ? ' selected' : '') + '>' + esc(catTh[c] || c) + '</option>'; }).join('') + '</select>' : esc(catTh[cat] || cat || '—')) + '</td>' +
+          '<td>' + (mg ? '<input type="checkbox" data-chg="admPromoEdit" data-sku="' + esc(p.sku) + '" data-f="smart"' + (sm ? ' checked' : '') + ' aria-label="Smart ' + esc(p.name) + '">' : (sm ? '✓' : '')) + '</td><td>' + (mg ? '<input type="checkbox" data-chg="admPromoEdit" data-sku="' + esc(p.sku) + '" data-f="magnet"' + (mgn ? ' checked' : '') + ' aria-label="Magnet ' + esc(p.name) + '">' : (mgn ? '✓' : '')) + '</td>' +
+          '<td><small class="hint">' + esc(p.why || (p.noCost ? 'ยังไม่มีต้นทุน' : '')) + '</small></td></tr>';
+      }).join('') + '</tbody></table></div>' + (A.poolErr && A.poolErr.length ? '<div class="alert bad" style="margin-top:8px">บันทึกไม่ได้ ' + A.poolErr.length + ' รายการ: ' + esc(A.poolErr.slice(0, 8).map(function (x) { return x.sku + ' ' + x.error; }).join(' · ')) + '</div>' : '') + '</div>';
+    return h;
+  }
+  /* ---------- v3: สต็อก SAP (Plan B · ไฟล์ Fiori F1595 + F1077) ---------- */
+  var STOCK_MODES = [['off', 'ปิด', 'ใช้ติ๊ก "มีของ/หมด" อย่างเดียวเหมือนเดิม'], ['shadow', 'ทดลองเงียบ', 'คำนวณให้ร้านดูในแท็บนี้ ลูกค้ายังไม่เห็น (แนะนำ 2 สัปดาห์แรก)'], ['night', 'ลูกค้าเห็นนอกเวลาร้าน', 'ช่วงร้านปิด ลูกค้าเห็น "ใกล้หมด/หมด" จากไฟล์ปิดร้าน · เวลาเปิดร้านใช้ติ๊กมือ'], ['full', 'ลูกค้าเห็นตลอด', 'ลูกค้าเห็น "ใกล้หมด/หมด" ตามสต็อกคงเหลือหัก buffer ตลอดวัน']];
+  var STK_TH = { ok: ['paid', 'มีของ'], low: ['new', 'ใกล้หมด'], out: ['red', 'หมด'], '': ['', '—'] };
+  function stockCheckBox(ck, kind) {
+    var c = ck.check || ck, h = '<div class="stock-check">';
+    if (kind === 'snap') {
+      h += '<div class="kv"><div><small>แถวที่ใช้ได้</small><b>' + fmt(c.rows) + '</b></div><div><small>SKU ที่จับคู่ได้</small><b>' + fmt(c.skus) + '</b></div><div><small>SKU หายจากไฟล์</small><b>' + fmt(c.missing.length) + ' (' + c.missingPct + '%)</b></div></div>';
+      if (c.dup) h += '<div class="alert warn">ไฟล์นี้เหมือนไฟล์ที่อัปโหลดเมื่อ ' + esc(c.dup.slice(0, 16)) + ' · ถ้าเป็นไฟล์ใหม่จริง ติ๊ก "ยืนยันเป็นไฟล์ใหม่"</div>';
+      if (c.partial) h += '<div class="alert bad">ไฟล์อาจไม่ครบ: ' + esc(c.partialWhy) + ' — ตรวจตัวกรอง Plant / Storage Location ใน Fiori ก่อน · ถ้าถูกต้อง ผู้จัดการติ๊กยืนยัน</div>';
+      if (c.skipPlant || c.skipSloc) h += '<div class="hint">ข้ามแถว Plant อื่น ' + fmt(c.skipPlant || 0) + ' · ไม่มี Storage Location (ของระหว่างทาง) ' + fmt(c.skipSloc || 0) + '</div>';
+      if (c.newSkus.length) h += '<div class="alert info">รหัส SAP ที่ยังไม่จับคู่กับสินค้าในร้าน ' + c.newSkus.length + ' รายการ (ไม่นับในสต็อก · จับคู่ได้ในกล่อง "รหัส SAP ใหม่")</div>';
+      if (c.jumps.length) h += '<div class="alert warn">จำนวนเปลี่ยนผิดปกติ (เกิน 5 เท่า): ' + esc(c.jumps.slice(0, 6).map(function (j) { return j.name + ' ' + fmt(j.prev) + '→' + fmt(j.now); }).join(' · ')) + '</div>';
+      if (c.zeroOpen.length) h += '<div class="alert warn">มีออเดอร์ที่ยังไม่เปิดบิลแต่สต็อกในไฟล์เป็น 0: ' + esc(c.zeroOpen.slice(0, 6).map(function (z) { return z.name; }).join(', ')) + '</div>';
+      if (c.missing.length) h += '<details><summary>SKU ที่หายจากไฟล์ (' + c.missing.length + ') → จะถูกตั้งเป็น 0</summary>' + c.missing.slice(0, 60).map(function (m) { return '<div class="row"><span>' + esc(m.name) + ' <small class="mono hint">' + esc(m.sku) + '</small></span><span>เดิม ' + fmt(m.prev) + (m.big ? ' <span class="pill red">สต็อกเยอะ</span>' : '') + '</span></div>'; }).join('') + '</details>';
+      h += '<details><summary>ดูตัวอย่างข้อมูล (' + c.preview.length + ' SKU)</summary><div class="tblw"><table><thead><tr><th>SKU</th><th>สินค้า</th><th class="r">เดิม</th><th class="r">ไฟล์นี้</th><th>หน่วย SAP</th></tr></thead><tbody>' + c.preview.slice(0, 200).map(function (r) { return '<tr><td class="mono">' + esc(r.sku) + '</td><td>' + esc(r.name) + '</td><td class="r">' + (r.prev === null ? '–' : fmt(r.prev)) + '</td><td class="r">' + fmt(r.now) + ' ' + esc(r.unit) + '</td><td>' + fmt(r.sap) + ' ' + esc(r.sapUnit) + '</td></tr>'; }).join('') + '</tbody></table></div></details>';
+    } else {
+      h += '<div class="kv"><div><small>แถวในไฟล์</small><b>' + fmt(c.rows) + '</b></div><div><small>เพิ่มใหม่</small><b>' + fmt(c.add) + '</b></div><div><small>ซ้ำ (เคยอัปโหลด)</small><b>' + fmt(c.dups) + '</b></div></div>' +
+        '<div class="hint">วันที่ในไฟล์: ' + esc((c.dates || []).join(', ') || '–') + ' · รหัสที่ยังไม่จับคู่ ' + fmt(c.unmapped) + ' แถว</div>' +
+        (c.unknown.length ? '<div class="alert warn">Movement Type ที่ระบบไม่รู้จัก: ' + esc(c.unknown.map(function (u) { return u.mvt + ' × ' + u.n; }).join(', ')) + ' (บันทึกได้ แต่ไม่นับเป็นยอดขาย · แจ้งผู้ดูแลระบบ)</div>' : '') +
+        '<div class="row-flex" style="flex-wrap:wrap;gap:6px;margin-top:6px">' + Object.keys(c.byBucket || {}).map(function (k) { return '<span class="pill">' + esc(k) + ' ' + fmt(c.byBucket[k]) + '</span>'; }).join('') + '</div>';
+    }
+    return h + '</div>';
+  }
+  function adStock(d) {
+    var s = d.stock || {}, mg = can('manage'), edit = can('stock'), ps = d.products || [], pm = {};
+    ps.forEach(function (p) { pm[p.sku] = p; });
+    var h = (s.alerts || []).map(function (a) { return '<div class="alert ' + (a.level === 'bad' ? 'bad' : a.level === 'warn' ? 'warn' : 'info') + '">' + esc(a.text) + '</div>'; }).join('');
+    var mode = STOCK_MODES.filter(function (x) { return x[0] === s.mode; })[0] || STOCK_MODES[0];
+    h += '<div class="box"><h3>สต็อกจาก SAP (อัปโหลดไฟล์จาก Fiori)</h3><div class="row"><span>โหมด</span><span><b>' + esc(mode[1]) + '</b></span></div><div class="hint">' + esc(mode[2]) + '</div>' +
+      (mg ? '<div class="field" style="margin-top:8px;max-width:420px"><label>เปลี่ยนโหมด (ผู้จัดการ)</label><select data-chg="admCfgSel" data-k="STOCK_MODE">' + STOCK_MODES.map(function (x) { return '<option value="' + x[0] + '"' + (x[0] === s.mode ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('') + '</select></div>' : '') +
+      '<div class="row"><span>ไฟล์ล่าสุด</span><span>' + (s.last ? esc(s.last.slice(0, 16)) + ' (' + s.ageH + ' ชม.ที่แล้ว)' : 'ยังไม่มี') + '</span></div><div class="row"><span>ตอนนี้</span><span>' + (s.isOpen ? 'เวลาเปิดร้าน · buffer × ' + s.timeFactor : 'นอกเวลาร้าน · buffer × ' + s.timeFactor) + (s.customer ? ' · <b>ลูกค้าเห็นสถานะสต็อก</b>' : ' · ลูกค้ายังไม่เห็น') + '</span></div>' +
+      (s.calibAt ? '<div class="hint">คำนวณ buffer ล่าสุด ' + esc(String(s.calibAt).slice(0, 16)) + ' (จากยอดขายหน้าร้านย้อนหลัง ' + (d.cfg.STOCK_WINDOW_DAYS || 28) + ' วัน)</div>' : '') + '</div>';
+    if (edit) {
+      var sk = A.stk, mv = A.mv;
+      h += '<div class="box"><h3>1) ไฟล์สต็อกคงเหลือ · Fiori F1595</h3><div class="hint">ทุกเย็นหลังปิดร้าน (และระหว่างวันถ้าต้องการ): Fiori → <b>Stock – Multiple Materials</b> (F1595) → Plant <b>' + esc(d.cfg.STOCK_PLANT || 'S212') + '</b> → Export เป็น .xlsx แล้วเลือกไฟล์ที่นี่ · ไฟล์ใหม่ <b>แทนที่ทั้งหมด</b> (SKU ที่ไม่มีในไฟล์ = 0)</div>' +
+        '<div class="acts" style="margin-top:8px"><div class="field" style="max-width:260px"><label>ไฟล์รอบไหน</label><select id="stk-kind"><option value="close"' + (!sk || sk.kind === 'close' ? ' selected' : '') + '>ปิดร้าน (หลัง ' + esc(d.cfg.STOCK_CLOSE || '20:00') + ')</option><option value="mid"' + (sk && sk.kind === 'mid' ? ' selected' : '') + '>ระหว่างวัน</option></select></div><input type="file" accept=".xlsx,.csv" data-chg="admStockFile"></div>';
+      if (sk) h += '<div class="stock-file"><b>' + esc(sk.file) + '</b>' + stockCheckBox(sk.res, 'snap') + '<div class="acts" style="margin-top:8px">' + (sk.res.check.dup ? '<label class="chk"><input type="checkbox" id="stk-dup"><span>ยืนยันเป็นไฟล์ใหม่ (Export ใหม่แล้ว)</span></label>' : '') + (sk.res.check.partial && mg ? '<label class="chk"><input type="checkbox" id="stk-partial"><span>ผู้จัดการยืนยัน: ไฟล์ถูกต้อง (ตรวจตัวกรองแล้ว)</span></label>' : '') +
+        '<button class="btn blue" data-a="admStockSave"' + (sk.res.check.partial && !mg ? ' disabled' : '') + '>บันทึกสต็อก</button><button class="btn" data-a="admStockCancel">ยกเลิกไฟล์นี้</button></div>' + (sk.res.check.partial && !mg ? '<div class="hint">ไฟล์อาจไม่ครบ ต้องให้ผู้จัดการยืนยัน</div>' : '') + '</div>';
+      h += '</div><div class="box"><h3>2) ไฟล์การเคลื่อนไหว · Fiori F1077</h3><div class="hint">หลังปิดร้าน: Fiori → <b>Material Documents Overview</b> (F1077) → วันที่ = วันนี้ · Plant ' + esc(d.cfg.STOCK_PLANT || 'S212') + ' → Export .xlsx · ใช้คำนวณยอดขายหน้าร้าน (251/252) เพื่อปรับ buffer · อัปโหลดซ้ำได้ ระบบตัดแถวซ้ำให้</div><div class="acts" style="margin-top:8px"><input type="file" accept=".xlsx,.csv" data-chg="admMovesFile"></div>';
+      if (mv) h += '<div class="stock-file"><b>' + esc(mv.file) + '</b>' + stockCheckBox(mv.res, 'moves') + '<div class="acts" style="margin-top:8px"><button class="btn blue" data-a="admMovesSave"' + (mv.res.check.add ? '' : ' disabled') + '>บันทึก ' + fmt(mv.res.check.add) + ' แถว</button><button class="btn" data-a="admMovesCancel">ยกเลิกไฟล์นี้</button></div></div>';
+      h += '</div>';
+    }
+    var rows = (s.rows || []).filter(function (r) { return hit(r, ['sku', 'name', 'material']); });
+    h += '<div class="box"><div class="section-heading"><h3>สต็อกคงเหลือ (' + rows.length + ')</h3>' + (mg ? '<button class="btn sm" data-a="adm" data-op="runJob" data-job="stockCalib">คำนวณ buffer ใหม่</button>' : '') + '</div><div class="hint">คงเหลือ = จากไฟล์ล่าสุด · ค้างเปิดบิล = ออเดอร์ MINI App ที่ยังไม่คีย์ POS · ขายได้ = คงเหลือ − ค้างเปิดบิล − buffer (กันของขายหน้าร้าน) · ≤ 0 = "ใกล้หมด" · คงเหลือ − ค้าง ≤ 0 = "หมด"</div>' + searchBox('ค้นหา SKU / ชื่อ / รหัส SAP') +
+      (rows.length ? '<div class="tblw" style="margin-top:6px"><table><thead><tr><th>สินค้า</th><th class="r">คงเหลือ</th><th class="r">ค้างเปิดบิล</th><th class="r">buffer</th><th class="r">ขายได้</th><th>สถานะ</th><th class="r">วันข้อมูล</th>' + (edit ? '<th></th>' : '') + '</tr></thead><tbody>' + rows.map(function (r) {
+        var st = STK_TH[r.state] || STK_TH[''], open = A.open['stk-' + r.sku];
+        return '<tr><td>' + esc(r.name) + ' <small class="mono hint">' + esc(r.sku) + (r.material ? ' · ' + esc(r.material) : '') + '</small>' + (r.note ? '<br><small class="hint">' + esc(r.note) + '</small>' : '') + (r.mult && r.mult !== 1 ? ' <span class="pill appr">× ' + r.mult + '</span>' : '') + '</td><td class="r">' + fmt(r.onHand) + ' ' + esc(r.unit) + '</td><td class="r">' + fmt(r.open) + '</td><td class="r">' + (r.bufEff === null ? fmt(r.buffer) : fmt(r.bufEff)) + '</td><td class="r">' + (r.avail === null ? '–' : fmt(r.avail)) + '</td><td><span class="pill ' + st[0] + '">' + st[1] + '</span>' + (r.manualOut ? ' <span class="pill red">ติ๊กหมด</span>' : '') + '</td><td class="r">' + fmt(r.conf) + (r.abc ? ' · ' + esc(r.abc) : '') + '</td>' +
+          (edit ? '<td><button class="btn sm" data-a="admToggle" data-k="stk-' + esc(r.sku) + '">' + (open ? 'ปิด' : 'นับจริง') + '</button></td>' : '') + '</tr>' +
+          (open ? '<tr><td colspan="8"><form class="acts" data-form="stockAdjust" data-sku="' + esc(r.sku) + '"><div class="field"><label>จำนวนที่นับได้จริง (' + esc(r.unit) + ')</label><input name="qty" inputmode="decimal" required value="' + r.onHand + '"></div><div class="field"><label>เหตุผล (บังคับ)</label><input name="reason" required maxlength="120" placeholder="เช่น นับจริงหลังปิดร้าน / ของเสีย"></div><button class="btn blue" type="submit">บันทึก</button></form>' +
+            (mg ? '<form class="acts" data-form="stockMult" data-sku="' + esc(r.sku) + '" style="margin-top:6px"><div class="field"><label>ตัวคูณ buffer ชั่วคราวของสินค้านี้ (0.5–5 · 1 = ปกติ)</label><input name="mult" inputmode="decimal" value="' + (r.mult || 1) + '"></div><button class="btn sm" type="submit">ตั้งตัวคูณ</button></form>' : '') + '</td></tr>' : '');
+      }).join('') + '</tbody></table></div>' : '<div class="empty">ยังไม่มีข้อมูลสต็อก · อัปโหลดไฟล์ F1595 ครั้งแรก</div>') + '</div>';
+    if (edit) h += '<div class="box"><h3>หยุดขาย / กลับมาขาย (รายสินค้า)</h3><div class="hint">"หมดวันนี้" กลับมาขายเองพรุ่งนี้ · "หมดจนกว่าไฟล์ถัดไป" กลับมาเองเมื่อไฟล์ F1595 ใหม่มีของ · "ระงับขาย" ต้องกดกลับเอง (เช่น ของเสีย/รอ QC)</div><div class="tblw" style="margin-top:6px"><table><thead><tr><th>สินค้า</th><th>สถานะขาย</th></tr></thead><tbody>' + ps.map(function (p) {
+      var v = p.inStock ? 'on' : p.hold ? 'hold' : p.outUntil === 'upload' ? 'upload' : 'today';
+      return '<tr><td>' + esc(p.name) + ' <small class="mono hint">' + esc(p.sku) + '</small>' + (p.hold ? '<br><small class="hint">' + esc(p.hold) + '</small>' : '') + '</td><td><select data-chg="admSellState" data-sku="' + esc(p.sku) + '" aria-label="สถานะขาย ' + esc(p.name) + '">' + [['on', 'ขายอยู่'], ['today', 'หมดวันนี้'], ['upload', 'หมดจนกว่าไฟล์ถัดไป'], ['hold', 'ระงับขาย']].map(function (x) { return '<option value="' + x[0] + '"' + (x[0] === v ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('') + '</select></td></tr>';
+    }).join('') + '</tbody></table></div></div>';
+    if ((s.newSkus || []).length) h += '<div class="box"><h3>รหัส SAP ใหม่ที่ยังไม่จับคู่ (' + s.newSkus.length + ')</h3><div class="hint">จับคู่กับ SKU ในร้าน + ตัวคูณหน่วย (เช่น SAP นับเป็นฟอง 30 ฟอง = 1 แผง → ตัวคูณ 30) · ถ้าไม่ขายใน MINI App กด "ไม่ขาย"</div>' + s.newSkus.map(function (n) {
+      return mg ? '<form class="acts" data-form="stockMap" data-mat="' + esc(n.material) + '" style="margin-top:8px"><div class="field"><label>' + esc(n.material) + ' · ' + esc(n.name) + ' (' + fmt(n.qty) + ' ' + esc(n.unit) + ')</label><select name="sku"><option value="">เลือก SKU</option>' + ps.map(function (p) { return '<option value="' + esc(p.sku) + '">' + esc(p.sku) + ' ' + esc(p.name) + '</option>'; }).join('') + '</select></div><div class="field" style="max-width:120px"><label>ตัวคูณ</label><input name="factor" inputmode="decimal" value="1"></div><input type="hidden" name="sapUnit" value="' + esc(n.unit) + '"><button class="btn sm blue" type="submit">จับคู่</button><button class="btn sm" type="button" data-a="admMapIgnore" data-mat="' + esc(n.material) + '">ไม่ขาย</button></form>'
+        : '<div class="row"><span>' + esc(n.material) + ' · ' + esc(n.name) + '</span><span>' + fmt(n.qty) + ' ' + esc(n.unit) + '</span></div>';
+    }).join('') + '</div>';
+    if (mg) h += '<form class="box acts" data-form="stockMult" data-sku=""><div class="field"><label>ตัวคูณ buffer ทั้งร้านชั่วคราว (เทศกาล/โปรใหญ่ · 0.5–5 · 1 = ปกติ)</label><input name="mult" inputmode="decimal" value="1"></div><button class="btn sm" type="submit">ตั้งทุกสินค้า</button></form>';
+    if ((s.snaps || []).length) h += '<div class="box"><h3>ประวัติไฟล์สต็อก</h3>' + s.snaps.map(function (x) { return '<div class="row"><span>' + esc(x.at) + ' · ' + (x.kind === 'close' ? 'ปิดร้าน' : 'ระหว่างวัน') + ' · ' + esc(x.file) + '<br><small class="hint">โดย ' + esc(x.by) + (x.note ? ' · ' + esc(x.note) : '') + '</small></span><span>' + fmt(x.skus) + ' SKU' + (x.missing ? ' · หาย ' + x.missing : '') + (x.newSkus ? ' · ใหม่ ' + x.newSkus : '') + '</span></div>'; }).join('') + '</div>';
+    if (can('export')) h += '<div class="dl-row"><button class="btn sm" data-a="admExport" data-k="stock">' + ic('dl') + ' สต็อกและ buffer .xlsx</button></div>';
+    return h;
+  }
+  /* อ่านไฟล์ Fiori → ส่งตรวจ (ยังไม่บันทึก) */
+  function stockFile(file, kind) {
+    C.busy(true, 'กำลังอ่านไฟล์...');
+    SHEETFILE.read(file).then(function (arr) {
+      C.busy(false);
+      var rows = arr.filter(function (r) { return r && r.some(function (v) { return String(v === undefined || v === null ? '' : v).trim() !== ''; }); }).map(function (r) { return r.map(function (v) { return v === undefined || v === null ? '' : String(v); }); });
+      if (rows.length < 2) { toast('ไม่พบแถวข้อมูลในไฟล์'); return; }
+      var body = { head: rows[0], rows: rows.slice(1), fileName: file.name, save: false };
+      if (kind === 'snap') { var ks = document.getElementById('stk-kind'); body.kind = ks ? ks.value : 'close'; }
+      if (JSON.stringify(body).length > 3600000) { toast('ไฟล์ใหญ่เกินไป · ใน Fiori กรอง Plant ' + ((S.cat && S.cat.cfg.STOCK_PLANT) || 'S212') + ' และเลือกเฉพาะคอลัมน์ที่จำเป็นก่อน Export', 6000); return; }
+      run('กำลังตรวจไฟล์...', api(kind === 'snap' ? 'stockUpload' : 'stockMoves', body), function (r) {
+        if (kind === 'snap') A.stk = { file: file.name, body: body, res: r, kind: body.kind }; else A.mv = { file: file.name, body: body, res: r };
+        draw();
+      });
+    }).catch(function (e) { C.busy(false); toast('อ่านไฟล์ไม่สำเร็จ: ' + e.message, 5000); });
+  }
   /* ---------- Excel (.xlsx) เขียนเอง ไม่ต้องใช้ไลบรารี ---------- */
   var CRC = (function () { var t = []; for (var n = 0; n < 256; n++) { var c = n; for (var k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
   function crc32(u8) { var c = 0xFFFFFFFF; for (var i = 0; i < u8.length; i++) c = CRC[(c ^ u8[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
@@ -877,10 +1111,24 @@
     if (op === 'approveCoin') return doBulk(g, op, ids, {}, 'อนุมัติส่วนลดสะสมแล้ว');
     if (op === 'setStockOn' || op === 'setStockOff') return doBulk(g, 'setStock', ids, { inStock: op === 'setStockOn' }, 'บันทึกสต็อกแล้ว', function () { (d.products || []).forEach(function (p) { if (ids.indexOf(p.sku) >= 0) p.inStock = op === 'setStockOn'; }); });
     if (op === 'imgReset' || op === 'imgClear') return doBulk(g, 'productImage', ids, { mode: op === 'imgReset' ? 'reset' : 'clear' }, op === 'imgReset' ? 'คืนรูปเริ่มต้นแล้ว' : 'ลบรูปแล้ว');
+    if (op === 'pointsOk' || op === 'pointsNo') return doBulk(g, 'pointsReview', ids, { ok: op === 'pointsOk', note: op === 'pointsNo' ? 'ไม่อนุมัติ (หลายรายการ)' : '' }, op === 'pointsOk' ? 'อนุมัติแต้มแล้ว' : 'ไม่อนุมัติแล้ว');
     if (op === 'deliveryDone') return doBulk(g, op, ids, {}, 'บันทึกส่งแล้ว', function () { ((d.route || {}).list || []).forEach(function (x) { if (ids.indexOf(x.id) >= 0) { x.delivery = 'done'; x.deliveredAt = new Date().toISOString().slice(0, 16).replace('T', ' '); } }); });
     toast('ยังไม่รองรับคำสั่งนี้');
   };
   function app() { return document.getElementById('app'); }
+  function jobText(r) {
+    if (!r) return '';
+    var x = [];
+    var other = r.released !== undefined || r.changed !== undefined || r.products !== undefined || !!r.picks || r.skus !== undefined;
+    if (r.sent || !other) x.push('ส่ง ' + (r.sent || 0) + ' ข้อความ');
+    if (r.released !== undefined) x.push('ปล่อยแต้ม ' + r.released + ' รายการ');
+    if (r.changed !== undefined) x.push('ที่อยู่เปลี่ยนสถานะ ' + r.changed + ' ที่');
+    if (r.products !== undefined) x.push('ตั้งสินค้าโปรตัวอย่าง ' + r.products + ' รายการ');
+    if (r.picks) x.push('Smart Set ' + r.picks.length + ' รายการ' + (r.kept ? ' (ใช้ชุดเดิม)' : ''));
+    if (r.skus !== undefined) x.push('คำนวณ buffer ' + r.skus + ' SKU');
+    if (r.reason) x.push(r.reason);
+    return x.length ? x.join(' · ') : 'ทำแล้ว (ไม่มีรายการที่ต้องทำ)';
+  }
   ACT.admPicking = function (el) { printPicking(picked(el.dataset.g)); };
   ACT.admCopyMigrate = function (el) {
     var d = A.d[key(A.tab)] || {}, ids = picked(el.dataset.g), link = d.cfg && d.cfg.LIFF_ID ? C.appLink('link', {}) : '';
@@ -922,7 +1170,7 @@
     toast('กำลังวัด 5 ครั้ง...');
   };
   ACT.admImportTpl = function () {
-    saveBlob(xlsx('Customers', ['s_member_no', 'name', 'phone', 'type', 'address', 'zone', 'lat', 'lng', 'trade', 'contact', 'avg_month'], [['S0000109999', 'ร้านตัวอย่าง (สมมติ)', '0890009999', 'FS', 'ซ.ตัวอย่าง 1', 'A', 13.8001, 100.6402, 'อาหารตามสั่ง', 'คุณตัวอย่าง', 12000]], 'แม่แบบนำเข้ารายชื่อลูกค้าเดิม'), 'Phokeaw_customer_master_template.xlsx');
+    saveBlob(xlsx('Customers', ['s_member_no', 'name', 'phone', 'type', 'address', 'zone', 'lat', 'lng', 'trade', 'contact', 'avg_month', 'tax_id'], [['S0000109999', 'ร้านตัวอย่าง (สมมติ)', '0890009999', 'FS', 'ซ.ตัวอย่าง 1', 'A', 13.8001, 100.6402, 'อาหารตามสั่ง', 'คุณตัวอย่าง', 12000, '0105500000000']], 'แม่แบบนำเข้ารายชื่อลูกค้าเดิม'), 'Phokeaw_customer_master_template.xlsx');
   };
   ACT.admImportSave = function () { var im = A.imp; if (!im) return; run('กำลังบันทึก...', api('memberImport', { rows: im.rows, save: true, fileName: im.file }), function (r) { A.imp = null; return after(r, 'เพิ่ม ' + r.added + ' · อัปเดต ' + r.updated + ' ร้าน'); }); };
   ACT.admImportCancel = function () { A.imp = null; draw(); };
@@ -930,7 +1178,7 @@
     C.busy(true, 'กำลังอ่านไฟล์...');
     SHEETFILE.read(file).then(function (arr) {
       C.busy(false);
-      var alias = { s_member_no: /^(s_member_no|sno|member_no|เลขสมาชิก|เลข s)$/i, name: /^(name|ชื่อ|ชื่อร้าน)$/i, phone: /^(phone|tel|เบอร์|เบอร์โทร)$/i, type: /^(type|ประเภท)$/i, address: /^(address|ที่อยู่)$/i, zone: /^(zone|โซน)$/i, lat: /^(lat|latitude|ละติจูด)$/i, lng: /^(lng|lon|long|longitude|ลองจิจูด)$/i, trade: /^(trade|ประเภทธุรกิจ)$/i, contact: /^(contact|ผู้ติดต่อ)$/i, avg_month: /^(avg_month|ยอดเฉลี่ย)$/i };
+      var alias = { s_member_no: /^(s_member_no|sno|member_no|เลขสมาชิก|เลข s)$/i, name: /^(name|ชื่อ|ชื่อร้าน)$/i, phone: /^(phone|tel|เบอร์|เบอร์โทร)$/i, type: /^(type|ประเภท)$/i, address: /^(address|ที่อยู่)$/i, zone: /^(zone|โซน)$/i, lat: /^(lat|latitude|ละติจูด)$/i, lng: /^(lng|lon|long|longitude|ลองจิจูด)$/i, trade: /^(trade|ประเภทธุรกิจ)$/i, contact: /^(contact|ผู้ติดต่อ)$/i, avg_month: /^(avg_month|ยอดเฉลี่ย)$/i, tax_id: /^(tax_id|taxid|tax id|เลขผู้เสียภาษี|เลขภาษี)$/i };
       var head = (arr[0] || []).map(function (h) { return String(h).trim(); }), ix = {};
       Object.keys(alias).forEach(function (k) { ix[k] = head.findIndex(function (h) { return alias[k].test(h); }); });
       if (ix.s_member_no < 0 && ix.phone < 0) { toast('ไม่พบคอลัมน์ s_member_no หรือ phone ในแถวแรก'); return; }
@@ -943,6 +1191,7 @@
   ACT.adm = function (el) {
     if (el.dataset.confirm && !el.dataset.sure) { el.dataset.sure = '1'; el.dataset.label = el.textContent; el.textContent = 'กดอีกครั้งเพื่อยืนยัน'; setTimeout(function () { if (el.isConnected) { delete el.dataset.sure; el.textContent = el.dataset.label; } }, 4000); return; }
     var op = el.dataset.op, data = { id: el.dataset.id, status: el.dataset.status, job: el.dataset.job, code: el.dataset.code };
+    if (el.dataset.all) data.all = el.dataset.all === '1'; if (el.dataset.ok !== undefined) data.ok = el.dataset.ok === '1'; if (el.dataset.what) data.what = el.dataset.what;
     if (op === 'payReview') data = { paymentId: el.dataset.pid, ok: el.dataset.ok === '1' };
     if (op === 'confirmPay' && el.dataset.full) data.full = true;
     var cur = A.d[key(A.tab)] || {};
@@ -955,7 +1204,10 @@
       return;
     }
     run('กำลังทำรายการ...', api(op, data), function (r) {
-      if (op === 'runJob') { A.jobRes = r; toast('ส่งแล้ว ' + (r.sent || 0) + ' ข้อความ', 3500); return after(r); }
+      if (op === 'runJob') { A.jobRes = r; toast(jobText(r), 3500); return (/smartRotate|demoPromo|stockCalib|areaRetag/.test(data.job) ? api('catalog').then(function (c) { S.cat = c; }) : Promise.resolve()).then(function () { return after(r); }); }
+      if (op === 'memberStatus') return after(r, data.status === 'new' ? 'ตั้งเป็นลูกค้าใหม่แล้ว (ได้สิทธิ์ลูกค้าใหม่)' : 'ตั้งเป็นลูกค้าเดิมแล้ว');
+      if (op === 'pointsReview') return after(r, data.ok ? 'อนุมัติแต้มแล้ว' : 'ไม่อนุมัติแล้ว', function (d) { if (d.points) d.points.review = (d.points.review || []).filter(function (x) { return x.id !== data.id; }); });
+      if (op === 'uatMember') return after(r, { magnet: 'คืนสิทธิ์ Magnet แล้ว', 'new': 'ให้สิทธิ์ลูกค้าใหม่ใหม่แล้ว', points: 'ล้างแต้มแล้ว' }[data.what] || 'เรียบร้อย');
       if (op === 'approveCoins') return after(r, 'อนุมัติ ' + r.approved + ' รายการ');
       if (op === 'askShort') return after(r, r.sent ? 'ส่งข้อความขอยอดที่ขาด ' + baht(r.short) + ' แล้ว' : 'บันทึกแล้ว (ลูกค้ายังไม่เพิ่มเพื่อน OA/ส่งไม่สำเร็จ)');
       if (op === 'remindOne') return after(r, r.sent ? 'ส่งเตือนแล้ว' : 'ส่งไม่สำเร็จ (ดู MessageLog)');
@@ -979,8 +1231,8 @@
   };
   FORMS.approveMember = function (f) { var fd = new FormData(f), id = f.dataset.id; run('กำลังอนุมัติ...', api('approveMember', { id: id, sno: fd.get('sno'), zone: fd.get('zone') || '', clearFlags: !!fd.get('clearFlags') }), function () { return after(null, 'อนุมัติแล้ว', function (d) { d.pendingMembers = (d.pendingMembers || []).filter(function (m) { return m.id !== id; }); }); }); };
   FORMS.memberUpdate = function (f) {
-    var fd = new FormData(f), g = geoParse(fd.get('geo')), data = { id: f.dataset.id, zone: fd.get('zone') || '', address: fd.get('address'), phone: fd.get('phone'), deliveryNote: fd.get('deliveryNote') || '', needBy: fd.get('needBy') || '', trade: fd.get('trade') || '', yard: fd.get('yard') || '' };
-    if (g) { data.lat = g.lat; data.lng = g.lng; } else if (!String(fd.get('geo') || '').trim()) { data.lat = ''; data.lng = ''; }
+    var fd = new FormData(f), data = { id: f.dataset.id, zone: fd.get('zone') || '', address: fd.get('address'), phone: fd.get('phone'), deliveryNote: fd.get('deliveryNote') || '', needBy: fd.get('needBy') || '', trade: fd.get('trade') || '', yard: fd.get('yard') || '' };
+    if (fd.get('geo') !== null) { var g = geoParse(fd.get('geo')); if (g) { data.lat = g.lat; data.lng = g.lng; } else if (!String(fd.get('geo') || '').trim()) { data.lat = ''; data.lng = ''; } } // v3: ปักหมุดผ่านช่อง "ปักหมุดให้ลูกค้า" (สมุดที่อยู่)
     run('กำลังบันทึก...', api('memberUpdate', data), function () { A.open['mem-' + f.dataset.id] = false; return after(null, 'บันทึกแล้ว'); });
   };
   FORMS.setPilot = function (f) { run('กำลังบันทึก...', api('setPilot', { id: new FormData(f).get('id'), on: true }), function () { return after(null, 'ให้สิทธิ์ชวนเพื่อนแล้ว'); }); };
@@ -1001,6 +1253,7 @@
     });
   };
   function change(t, c) {
+    if (v3change(t, c)) return;
     if (c === 'admPick') { var g = A.pick[t.dataset.g] = A.pick[t.dataset.g] || {}; g[t.dataset.id] = t.checked; draw(); }
     else if (c === 'admPickAll') { var g2 = A.pick[t.dataset.g] = A.pick[t.dataset.g] || {}; t.dataset.ids.split(',').forEach(function (id) { g2[id] = t.checked; }); draw(); }
     else if (c === 'admImport') { var fi = t.files && t.files[0]; if (fi) importFile(fi); t.value = ''; }
@@ -1016,6 +1269,85 @@
     else if (c === 'admWave' || c === 'admBike') { if (!t.value) return; var ids = t.dataset.id.split(','), data = c === 'admWave' ? { slot: t.value } : { bike: t.value }; run('กำลังย้าย...', Promise.all(ids.map(function (id) { return api('orderWave', Object.assign({ id: id }, data)); })), function () { return after(null, c === 'admWave' ? 'ย้ายรอบแล้ว' : 'เปลี่ยนรถแล้ว'); }); }
     else if (c === 'admAlias') run('กำลังบันทึก...', api('productAlias', { sku: t.dataset.sku, alias: t.value }), function () { return api('catalog').then(function (r) { S.cat = r; toast('บันทึกคำเรียกแล้ว'); }); });
     else if (c === 'admRole') run('กำลังเปลี่ยนสิทธิ์...', api('teamUpdate', { uid: t.dataset.uid, role: t.value }), function () { return after(null, 'เปลี่ยนสิทธิ์แล้ว'); });
+  }
+  /* ---------- v3: ปุ่ม / ฟอร์ม / ช่องเลือก ---------- */
+  function modal(inner) { var m = document.createElement('div'); m.className = 'modal'; m.innerHTML = '<div class="modal-in">' + inner + '<button class="btn block" data-a="admClose">ปิด</button></div>'; document.body.appendChild(m); }
+  ACT.admShopPhoto = function (el) { run('กำลังเปิดรูป...', api('shopPhoto', { id: el.dataset.id }), function (r) { modal('<img src="' + r.dataUrl + '" alt="รูปหน้าร้าน"><div class="hint">รูปส่วนตัวของลูกค้า ใช้ยืนยันร้านเท่านั้น ห้ามส่งต่อ</div>'); }); };
+  ACT.admQR = function (el) { modal('<div class="qr"><div class="code">' + C.qrSvg(el.dataset.t) + '</div><b>' + esc(el.dataset.n || '') + '</b><div class="copy"><input readonly value="' + esc(el.dataset.t) + '"><button class="btn sm" data-a="copy" data-t="' + esc(el.dataset.t) + '">คัดลอก</button></div><div class="hint">แคปหน้าจอ/พิมพ์ติดป้าย · ลิงก์มีรหัสช่องทาง ระบบนับลูกค้าจาก QR นี้</div></div>'); };
+  ACT.admChan = function (el) { run('กำลังบันทึก...', api('channelSave', { code: el.dataset.code, name: el.dataset.name, active: el.dataset.on === '1' }), function () { return after(null, el.dataset.on === '1' ? 'เปิดช่องทางแล้ว' : 'ปิดช่องทางแล้ว'); }); };
+  ACT.admPromoSave = function () {
+    var ed = A.promoEdit || {}, rows = Object.keys(ed).map(function (k) { return Object.assign({ sku: k }, ed[k]); });
+    if (!rows.length) return;
+    run('กำลังบันทึกรายการโปร...', api('promoPool', { rows: rows }), function (r) { A.poolErr = r.errors || []; A.promoEdit = {}; return api('catalog').then(function (c) { S.cat = c; return after(r, 'บันทึกแล้ว ' + r.saved + ' รายการ' + (r.errors.length ? ' · ไม่ผ่าน ' + r.errors.length : '')); }); });
+  };
+  ACT.admPoolTpl = function () {
+    var P = (A.d[key('promo')] || {}).promo || {};
+    saveBlob(xlsx('Pool', ['sku', 'name', 'promo_cat', 'smart', 'magnet', 'kg', 'price', 'gp_pct', 'note'], (P.pool || []).map(function (p) { return [p.sku, p.name, p.promoCat || '', p.smart ? 'Y' : 'N', p.magnet ? 'Y' : 'N', p.kg, p.price, p.gp === null ? '' : p.gp, p.why || '']; }), 'รายการสินค้าโปร Smart / Magnet'), 'Phokeaw_promo_pool.xlsx');
+  };
+  function poolFile(file) {
+    C.busy(true, 'กำลังอ่านไฟล์...');
+    SHEETFILE.read(file).then(function (arr) {
+      C.busy(false);
+      var head = (arr[0] || []).map(function (h) { return String(h).trim().toLowerCase(); }), ix = function (k) { return head.indexOf(k); };
+      if (ix('sku') < 0) { toast('แถวแรกต้องมีคอลัมน์ sku (และ promo_cat / smart / magnet)'); return; }
+      var yes = function (v) { return /^(y|yes|true|1|ใช่|✓)$/i.test(String(v || '').trim()); }, ed = A.promoEdit = A.promoEdit || {}, n = 0;
+      arr.slice(1).forEach(function (r) {
+        var sku = String(r[ix('sku')] || '').trim(); if (!sku) return; var e = {};
+        if (ix('promo_cat') >= 0) e.promoCat = String(r[ix('promo_cat')] || '').trim();
+        if (ix('smart') >= 0) e.smart = yes(r[ix('smart')]);
+        if (ix('magnet') >= 0) e.magnet = yes(r[ix('magnet')]);
+        if (Object.keys(e).length) { ed[sku] = Object.assign(ed[sku] || {}, e); n++; }
+      });
+      toast('อ่านแล้ว ' + n + ' รายการ · ตรวจในตาราง แล้วกด "บันทึก"', 4000); draw();
+    }).catch(function (e) { C.busy(false); toast('อ่านไฟล์ไม่สำเร็จ: ' + e.message); });
+  }
+  ACT.admStockSave = function () {
+    var sk = A.stk; if (!sk) return;
+    var dup = document.getElementById('stk-dup'), part = document.getElementById('stk-partial');
+    if (sk.res.check.dup && !(dup && dup.checked)) { toast('ไฟล์นี้เหมือนไฟล์เดิม · ติ๊ก "ยืนยันเป็นไฟล์ใหม่" ก่อน'); return; }
+    if (sk.res.check.partial && !(part && part.checked)) { toast('ไฟล์อาจไม่ครบ · ผู้จัดการต้องติ๊กยืนยันก่อน'); return; }
+    var body = Object.assign({}, sk.body, { save: true, force: !!((dup && dup.checked) || (part && part.checked)) });
+    run('กำลังบันทึกสต็อก...', api('stockUpload', body), function (r) { A.stk = null; return api('catalog').then(function (c) { S.cat = c; return after(r, 'บันทึกสต็อกแล้ว ' + r.check.skus + ' SKU' + (r.back ? ' · กลับมาขาย ' + r.back + ' รายการ' : '') + (r.calibrated ? ' · คำนวณ buffer ใหม่แล้ว' : '')); }); });
+  };
+  ACT.admStockCancel = function () { A.stk = null; draw(); };
+  ACT.admMovesSave = function () { var mv = A.mv; if (!mv) return; run('กำลังบันทึก...', api('stockMoves', Object.assign({}, mv.body, { save: true })), function (r) { A.mv = null; return after(r, 'บันทึกการเคลื่อนไหว ' + r.check.add + ' แถว · คำนวณ buffer ใหม่แล้ว'); }); };
+  ACT.admMovesCancel = function () { A.mv = null; draw(); };
+  ACT.admMapIgnore = function (el) { run('กำลังบันทึก...', api('stockMap', { material: el.dataset.mat, status: 'ignored' }), function () { return after(null, 'ตั้งเป็น "ไม่ขายใน MINI App" แล้ว'); }); };
+  FORMS.stockAdjust = function (f) { var fd = new FormData(f); run('กำลังบันทึก...', api('stockAdjust', { sku: f.dataset.sku, qty: String(fd.get('qty')).replace(/,/g, ''), reason: fd.get('reason') }), function (r) { A.open['stk-' + f.dataset.sku] = false; return after(r, 'ปรับสต็อก ' + fmt(r.from) + ' → ' + fmt(r.to)); }); };
+  FORMS.stockMult = function (f) { run('กำลังบันทึก...', api('stockMult', { sku: f.dataset.sku || '', mult: new FormData(f).get('mult') }), function (r) { return after(r, 'ตั้งตัวคูณแล้ว ' + r.n + ' สินค้า'); }); };
+  FORMS.stockMap = function (f) { var fd = new FormData(f); if (!fd.get('sku')) { toast('เลือก SKU ก่อน'); return; } run('กำลังจับคู่...', api('stockMap', { material: f.dataset.mat, sku: fd.get('sku'), factor: fd.get('factor'), sapUnit: fd.get('sapUnit') }), function () { return after(null, 'จับคู่แล้ว · มีผลกับไฟล์ถัดไป'); }); };
+  FORMS.memberArea = function (f) { var fd = new FormData(f); run('กำลังบันทึก...', api('memberArea', { id: f.dataset.id, on: !!fd.get('on'), until: fd.get('until') || '', note: fd.get('note') || '' }), function () { return after(null, fd.get('on') ? 'อนุญาตส่งนอกพื้นที่แล้ว' : 'ยกเลิกการอนุญาตแล้ว'); }); };
+  FORMS.addressStaff = function (f) { var fd = new FormData(f); run('กำลังบันทึกหมุด...', api('addressStaff', { id: f.dataset.id, geo: fd.get('geo') || '', address: fd.get('address') || '' }), function (r) { return after(r, 'บันทึกหมุดแล้ว · ' + ({ 'in': 'ในพื้นที่', band: 'แถบขอบ', out: 'นอกพื้นที่' }[r.area] || r.area)); }); };
+  FORMS.pointsAdjust = function (f) { var fd = new FormData(f); run('กำลังปรับแต้ม...', api('pointsAdjust', { memberId: f.dataset.id, points: fd.get('points'), note: fd.get('note') }), function (r) { return after(r, 'ปรับแต้มแล้ว คงเหลือ ' + fmt(r.points.bal)); }); };
+  FORMS.pointsReverse = function (f) { var fd = new FormData(f); run('กำลังหักแต้มคืน...', api('pointsReverse', { id: String(fd.get('id') || '').trim(), reason: fd.get('reason') }), function (r) { return after(r, 'หักแต้มคืนแล้ว ' + (r.reversed || 0) + ' รายการ'); }); };
+  FORMS.channelSave = function (f) { var fd = new FormData(f); run('กำลังสร้าง...', api('channelSave', { code: fd.get('code'), name: fd.get('name'), note: fd.get('note'), active: true }), function (r) { ACT.admQR({ dataset: { t: r.link, n: (fd.get('name') || r.code) + ' · ' + r.code } }); return after(r, 'สร้างช่องทาง ' + r.code + ' แล้ว'); }); };
+  FORMS.areaBand = function (f) { var v = new FormData(f).get('band'); run('กำลังบันทึก...', api('configSet', { key: 'AREA_BAND_M', value: v }), function () { A.bandDraft = undefined; return api('catalog').then(function (c) { S.cat = c; return after(null, 'บันทึกแถบขอบ ' + fmt(v) + ' ม. แล้ว · ตรวจทุกที่อยู่ใหม่แล้ว'); }); }); };
+  FORMS.areaGrace = function (f) { var v = new FormData(f).get('grace') || ''; run('กำลังบันทึก...', api('configSet', { key: 'AREA_GRACE_UNTIL', value: v }), function () { return api('catalog').then(function (c) { S.cat = c; return after(null, v ? 'ผ่อนผันถึง ' + C.thDate(v) : 'ยกเลิกการผ่อนผันแล้ว'); }); }); };
+  FORMS.uatReset = function (f) {
+    var fd = new FormData(f), scopes = fd.getAll('scope');
+    if (!scopes.length) { toast('เลือกข้อมูลที่จะล้างอย่างน้อย 1 อย่าง'); return; }
+    if (String(fd.get('confirm') || '') !== 'RESET') { toast('พิมพ์คำว่า RESET (ตัวพิมพ์ใหญ่) เพื่อยืนยัน'); return; }
+    run('กำลังล้างข้อมูลทดสอบ...', api('uatReset', { scopes: scopes, confirm: 'RESET' }), function (r) {
+      try { Object.keys(localStorage).forEach(function (k) { if (/^cart_/.test(k)) localStorage.removeItem(k); }); } catch (e) { }
+      A.d = {}; A.at = {};
+      return Promise.all([api('catalog'), C.refreshMe()]).then(function (x) { S.cat = x[0]; toast('ล้างแล้ว: ' + r.scopes.join(', ') + ' · ให้ผู้ทดสอบปิดแล้วเปิด MINI App ใหม่', 6000); show(); });
+    });
+  };
+  function cfgSet(k, v, msg) { run('กำลังบันทึก...', api('configSet', { key: k, value: v }), function () { return api('catalog').then(function (c) { S.cat = c; return after(null, msg || 'บันทึกแล้ว'); }); }); }
+  function v3change(t, c) {
+    if (c === 'admCfg') { cfgSet(t.dataset.k, t.checked ? 'TRUE' : 'FALSE', (t.checked ? 'เปิด ' : 'ปิด ') + t.dataset.k); return true; }
+    if (c === 'admCfgSel') { cfgSet(t.dataset.k, t.value, 'ตั้ง ' + t.dataset.k + ' = ' + t.value); return true; }
+    if (c === 'admPromoEdit') { var ed = A.promoEdit = A.promoEdit || {}, e = ed[t.dataset.sku] = ed[t.dataset.sku] || {}; e[t.dataset.f] = t.type === 'checkbox' ? t.checked : t.value; draw(); return true; }
+    if (c === 'admSmartPick') { run('กำลังบันทึก...', api('smartOverride', { date: t.dataset.date, cat: t.dataset.cat, sku: t.value }), function () { return after(null, t.value ? 'ล็อกรายการของพรุ่งนี้แล้ว' : 'ให้ระบบเลือกเอง'); }); return true; }
+    if (c === 'admStockFile' || c === 'admMovesFile') { var fi = t.files && t.files[0]; if (fi) stockFile(fi, c === 'admStockFile' ? 'snap' : 'moves'); t.value = ''; return true; }
+    if (c === 'admPoolFile') { var fp = t.files && t.files[0]; if (fp) poolFile(fp); t.value = ''; return true; }
+    if (c === 'admSellState') {
+      var v = t.value, data = { sku: t.dataset.sku, inStock: v === 'on', kind: v === 'on' ? '' : v };
+      run('กำลังบันทึก...', api('setStock', data), function (r) { S.cat.products.forEach(function (p) { if (p.sku === t.dataset.sku) p.inStock = r.product.inStock; }); return after(r, { on: 'กลับมาขายแล้ว', today: 'หมดวันนี้ (กลับมาพรุ่งนี้)', upload: 'หมดจนกว่าไฟล์สต็อกถัดไป', hold: 'ระงับขายแล้ว' }[v]); });
+      return true;
+    }
+    if (c === 'admBand') { A.bandDraft = Math.max(0, Math.min(5000, Number(t.value) || 0)); var svg = app().querySelector('.area-svg'), d = A.d[key('tools')]; if (svg && d && d.areaCfg) svg.outerHTML = areaSvg(d.areaCfg, A.bandDraft); return true; }
+    return false;
   }
   /* ล็อกหน้าจอหลังร้านเมื่อไม่ได้ใช้งาน (ADMIN_IDLE_MIN) — เครื่องที่ใช้ร่วมกันหน้าร้าน */
   ['pointerdown', 'keydown'].forEach(function (ev) { document.addEventListener(ev, function () { A.lastAct = Date.now(); }, { passive: true }); });
