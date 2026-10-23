@@ -2,24 +2,51 @@
 <html lang="th">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<!-- ความปลอดภัย: โหลดสคริปต์ได้เฉพาะจากเว็บนี้ LINE และไลบรารีแผนที่ MapLibre (เวอร์ชันล็อก 4.7.1 จาก unpkg / jsDelivr) · ห้ามสคริปต์แทรกในหน้า · เชื่อมต่อเฉพาะ https -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://static.line-scdn.net https://*.line-scdn.net https://unpkg.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net; img-src 'self' data: blob: https:; connect-src 'self' https:; font-src 'self' data:; worker-src 'self' blob:; child-src blob:; frame-src https://*.line.me https://*.line-apps.com; object-src 'none'; base-uri 'self'; form-action 'self'">
-<meta name="referrer" content="strict-origin-when-cross-origin">
-<title>Betagro Shop โพธิ์แก้ว</title>
-<meta name="theme-color" content="#006B4E">
-<meta name="description" content="สั่งวัตถุดิบ ดูบิล และใช้สิทธิ์สมาชิก Betagro Shop โพธิ์แก้ว ผ่าน LINE">
-<link rel="preconnect" href="https://script.google.com" crossorigin>
-<link rel="preconnect" href="https://script.googleusercontent.com" crossorigin>
-<link rel="preconnect" href="https://static.line-scdn.net">
-<link rel="dns-prefetch" href="https://tiles.openfreemap.org">
-<link rel="stylesheet" href="style.css?v=3.0.0">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>ย้ายหน้าเว็บร้านแล้ว</title>
+<!-- 3.1.2: วางแทน index.html ใน repo เดิม (pokeaw-demo) หลังเปลี่ยน LIFF Endpoint URL ไปที่ repo ใหม่แล้วเท่านั้น
+     เปิดในเบราว์เซอร์ทั่วไป → พาไปหน้าใหม่ทันที (เก็บหน้าที่ตั้งใจเปิด เช่น ?page=bills) / เปิดในแอป LINE → ปุ่มเปิด MINI App ของร้าน
+     ไฟล์นี้ไม่มี token รหัสลับ หรือข้อมูลลูกค้า -->
+<style>
+  :root { --bg: #f4f7f5; --card: #ffffff; --ink: #1f2d27; --muted: #5f7368; --green: #0e7c47; --line: #d5ddd8; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #111a16; --card: #1a2620; --ink: #e8efeb; --muted: #a7b8ae; --green: #3fbf7f; --line: #2c3b33; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px; background: var(--bg); color: var(--ink);
+    font: 16px/1.6 "Leelawadee UI", "Noto Sans Thai", "Sarabun", system-ui, sans-serif; }
+  main { width: 100%; max-width: 420px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 24px; text-align: center; }
+  h1 { font-size: 20px; margin: 0 0 8px; }
+  p { margin: 0 0 16px; color: var(--muted); }
+  a.btn { display: block; padding: 14px 16px; border-radius: 12px; background: var(--green); color: #fff; font-weight: 700; text-decoration: none; }
+  small { display: block; margin-top: 16px; color: var(--muted); font-size: 14px; }
+</style>
 </head>
 <body>
-<div id="app"><div class="boot" role="status"><span class="boot-brand">BETAGRO SHOP</span><span class="spinner" aria-hidden="true"></span><b>กำลังเปิดร้านโพธิ์แก้ว</b><small>รอสักครู่</small></div></div>
-<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-<script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
-<script src="config.js?v=3.0.0"></script>
-<script src="app.js?v=3.0.0"></script>
+<main>
+  <h1>ร้านย้ายหน้าเว็บไปที่ใหม่แล้ว</h1>
+  <p id="msg">กำลังพาไปหน้าใหม่...</p>
+  <a id="go" class="btn" href="https://pilot-shop.github.io/phokaew/">เปิดหน้าใหม่</a>
+  <small>Betagro Shop โพธิ์แก้ว<br>ถ้ากดแล้วยังกลับมาหน้านี้ กรุณาแจ้งร้าน</small>
+</main>
+<script>
+(function () {
+  var NEW = 'https://pilot-shop.github.io/phokaew/', LIFF = 'https://miniapp.line.me/2011854466-g7l4isi8';
+  var keep = {}, skip = /^(code|state|liffClientId|liffRedirectUri|liff\.state)$/;
+  function take(q, d) { // เก็บพารามิเตอร์หน้าที่ตั้งใจเปิด (รวมที่ซ้อนอยู่ใน liff.state) ไม่เก็บค่าของการล็อกอิน LINE
+    try { new URLSearchParams(String(q || '').replace(/^[^?]*\?/, '')).forEach(function (v, k) { if (k === 'liff.state' && d < 3) take(v, d + 1); else if (!skip.test(k) && !(k in keep)) keep[k] = v; }); } catch (e) { }
+  }
+  take(location.search, 0);
+  var qs = Object.keys(keep).map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(keep[k]); }).join('&');
+  var inLine = /\bLine\//i.test(navigator.userAgent || '');
+  var go = document.getElementById('go'), msg = document.getElementById('msg');
+  if (inLine) { // ในแอป LINE: เปิดผ่านลิงก์ MINI App (ตาม Endpoint URL ที่ร้านตั้ง)
+    go.href = LIFF + (qs ? '?' + qs : ''); go.textContent = 'เปิด MINI App ของร้าน';
+    msg.textContent = 'กดปุ่มด้านล่าง หรือเปิดจากเมนูในแชต LINE ของร้านอีกครั้ง';
+  } else {
+    go.href = NEW + (qs ? '?' + qs : '');
+    try { location.replace(go.href); } catch (e) { msg.textContent = 'กดปุ่มด้านล่างเพื่อเปิดหน้าใหม่'; }
+  }
+})();
+</script>
 </body>
 </html>
