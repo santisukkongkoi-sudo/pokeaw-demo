@@ -3,13 +3,14 @@
  * v3.0.0: Smart Set / Magnet Set, แต้มสะสม, สมุดที่อยู่ + ปักหมุดบนแผนที่ (MapLibre + OpenFreeMap), ตรวจพื้นที่ส่ง, สต็อก SAP
  * v3.1.1: ชื่อโปรฝั่งลูกค้าเป็นภาษาธรรมดา (ซื้อคู่พิเศษ / ส่วนลดครั้งแรก), ลงทะเบียนสั้นลง, บิลวางยอดและ QR ไว้บนสุด, หน้าแรกปุ่มหลักขึ้นก่อน, ตัวอักษรใหญ่ขึ้น, ปักหมุดบอกระยะจากร้าน
  * v3.1.0: ส่งด่วนในวัน (บอกเวลาส่งถึงในตะกร้า), เลือกที่อยู่แบบ Grab, ผูกบัญชีด้วยเบอร์/รหัส S/ชื่อ, สั่งประจำเพิ่มสินค้าได้, กดแล้วตอบสนองทันที
+ * v3.1.5: ปิดข้อสังเกต UAT ระบบจริง 3.1.4 (ค้นคำเรียกสินค้า, ส่งรวมรอบบอกเวลาเร็วสุด, ลดเท่ากันเลือกซื้อคู่พิเศษ, ถอดบัญชีร่วมแล้วรายการหายทันที)
  * v3.1.4: ลูกค้าไม่เห็นเป้าเวลาส่งของร้าน (บอกเวลาที่คาดว่าจะถึง), ผ่อนผันหมุดเดิมเฉพาะลูกค้าเดิมที่ยังไม่มีสมุดที่อยู่, ปุ่มยืนยันสั่งประจำหลังร้านถาม, แจ้งกำลังอัปเดตรายการบิล
  * v3.1.3: สวมบทลูกค้าทดสอบ + แชตจำลอง + นาฬิกาจำลอง (เครื่องมือ UAT ผู้จัดการ), ค้นหาที่อยู่ในเขตส่งก่อน, บิลรับเองที่ร้านบอกเวลามารับ
  */
 (function () {
   'use strict';
   var CFG = window.APP_CONFIG || {};
-  var APP_VERSION = '3.1.4';
+  var APP_VERSION = '3.1.5';
 
   /* ===== คำนวณตะกร้า (ใช้ร่วมกันทั้งหลังบ้านและหน้า MINI App — แก้ที่เดียวทั้งสองฝั่ง) ===== */
   function daysBetween(a, b) {
@@ -115,7 +116,8 @@
       } else mg.why = 'ยังไม่มีสินค้าที่ร่วมรายการในตะกร้า';
     }
     var kind = '';
-    if (mg.ok && mg.disc > 0 && mg.disc >= sm.disc) kind = 'MAGNET'; else if (sm.disc > 0) kind = 'SMART';
+    // 3.1.5 ลดเท่ากัน → เลือกซื้อคู่พิเศษ (Smart) เก็บส่วนลดครั้งแรก (ใช้ได้ครั้งเดียว) ไว้ให้ลูกค้า · ลูกค้ายังเลือกเองได้
+    if (mg.ok && mg.disc > 0 && mg.disc > sm.disc) kind = 'MAGNET'; else if (sm.disc > 0) kind = 'SMART';
     if (choice === 'SMART' && sm.disc > 0) kind = 'SMART'; else if (choice === 'MAGNET' && mg.ok) kind = 'MAGNET';
     var lineDisc = {}, lineQty = {};
     if (kind === 'SMART') sm.units.forEach(function (u) { lineDisc[u.li] = rnd2((lineDisc[u.li] || 0) + u.disc); lineQty[u.li] = (lineQty[u.li] || 0) + 1; });
@@ -735,16 +737,19 @@
     return { kind: 'express', date: today, at: '', within: true, local: true };
   }
   /* ข้อความเวลา: ใช้ทั้งตะกร้า หน้าส่งออเดอร์แล้ว และหน้าบิล */
-  function etaText(q, H) {
+  var POOL_SUB = 'ยอดยังไม่ถึงขั้นต่ำ ร้านรวมส่งกับรอบที่ผ่านย่านของคุณ เวลาอาจเลื่อนออกไป';
+  function etaText(q, H, pool) {
     H = H || hoursOf(); var tmr = q.date && q.date > todayStr();
     if (q.kind === 'pickup') return { big: (tmr ? 'พรุ่งนี้ ' : '') + 'มารับได้ ' + q.at + ' ถึง ' + q.until + ' น.', sub: 'ร้านแจ้งในแชตเมื่อจัดของเสร็จ' };
-    if (q.kind === 'morning') return { big: 'ส่งเที่ยวแรก' + (tmr ? 'พรุ่งนี้' : 'เช้านี้') + ' ถึงก่อน ' + q.at + ' น.', sub: tmr ? 'ร้านปิดรับออเดอร์ส่งวันนี้หลัง ' + H.lastDeliver + ' น.' : 'ร้านเปิด ' + H.open + ' น.' };
+    /* 3.1.5 ยอดต่ำกว่าขั้นต่ำ (ส่งรวมรอบ): บอกว่าเป็นเวลาที่เร็วที่สุด ไม่ใช่เวลาแน่นอน */
+    if (q.kind === 'morning') return { big: (pool ? 'ส่งรวมรอบ เร็วสุดเที่ยวแรก' : 'ส่งเที่ยวแรก') + (tmr ? 'พรุ่งนี้' : 'เช้านี้') + ' ถึงก่อน ' + q.at + ' น.', sub: pool ? POOL_SUB : tmr ? 'ร้านปิดรับออเดอร์ส่งวันนี้หลัง ' + H.lastDeliver + ' น.' : 'ร้านเปิด ' + H.open + ' น.' };
     /* 3.1.4 ลูกค้าไม่เห็นเป้าเวลาส่งของร้าน (ใช้ภายในร้าน) บอกเวลาที่คาดว่าจะถึงอย่างเดียว */
-    if (!q.at) return { big: 'กำลังคำนวณเวลาส่งถึง', sub: 'คำนวณจากรถที่ว่างตอนนี้' };
+    if (!q.at) return { big: 'กำลังคำนวณเวลาส่งถึง', sub: pool ? POOL_SUB : 'คำนวณจากรถที่ว่างตอนนี้' };
+    if (pool) return { big: 'ส่งรวมรอบ เร็วสุดประมาณ ' + q.at + ' น.', sub: POOL_SUB };
     return { big: 'ส่งถึงประมาณ ' + q.at + ' น.', sub: q.within === false ? 'ช่วงนี้มีออเดอร์ส่งหลายจุด เวลาโดยประมาณ' : 'เวลาโดยประมาณ' };
   }
-  function etaCard(mode) {
-    var q = S.ui.eta && S.ui.etaFor === mode ? S.ui.eta : localQuote(mode), x = etaText(q);
+  function etaCard(mode, pool) {
+    var q = S.ui.eta && S.ui.etaFor === mode ? S.ui.eta : localQuote(mode), x = etaText(q, null, mode === 'deliver' && !!pool);
     return '<div class="eta-card' + (q.kind === 'morning' ? ' later' : '') + '" aria-live="polite"><span class="eta-ic">' + icon(q.kind === 'pickup' ? 'shop' : 'clock') + '</span><div><b>' + esc(x.big) + '</b><small>' + esc(x.sub) + '</small></div></div>';
   }
   function etaRules() {
@@ -765,7 +770,7 @@
       api('deliveryEta', { mode: k.mode, kg: k.kg, addrId: a ? a.id : '' }, { quiet: true, tries: 2 }).then(function (r) {
         if (S.ui.etaKey !== key) return;
         S.ui.eta = r.quote; S.ui.etaFor = k.mode;
-        var box = app.querySelector('.eta-card'); if (S.page === 'cart' && box) box.outerHTML = etaCard(k.mode);
+        var box = app.querySelector('.eta-card'); if (S.page === 'cart' && box) box.outerHTML = etaCard(k.mode, k.pool);
       }).catch(function () { S.ui.etaKey = ''; });
     }, 200);
   }
@@ -917,7 +922,7 @@
     var pr = k.promo, sm = pr.smart, mg = pr.magnet, c = S.cat.cfg, h = '', n = [], trig = Number(c.SMART_TRIGGER_KG) || 1;
     if (!sm.on && !mg.on) return '';
     if (pr.both) {
-      h += '<div class="hint">ใช้ได้ 1 โปรต่อบิล ระบบเลือกแบบที่ลดมากกว่าให้แล้ว เปลี่ยนได้</div><div class="promo-pick">' +
+      h += '<div class="hint">' + (sm.disc === mg.disc ? 'ใช้ได้ 1 โปรต่อบิล ลดเท่ากัน ระบบเลือก' + SMART_TH + 'ให้ เก็บ' + MAGNET_TH + 'ไว้ใช้บิลถัดไป เปลี่ยนได้' : 'ใช้ได้ 1 โปรต่อบิล ระบบเลือกแบบที่ลดมากกว่าให้แล้ว เปลี่ยนได้') + '</div><div class="promo-pick">' + // 3.1.5
         '<label class="chk"><input type="radio" name="promo" value="SMART" data-chg="promo"' + (k.promoKind === 'SMART' ? ' checked' : '') + '><span><b>' + SMART_TH + ' ลด ' + baht(sm.disc) + '</b><small>ลด ' + c.SMART_DISCOUNT + '% ' + sm.used + ' ชิ้น ' + MAGNET_TH + 'เก็บไว้ใช้บิลถัดไป</small></span></label>' +
         '<label class="chk"><input type="radio" name="promo" value="MAGNET" data-chg="promo"' + (k.promoKind === 'MAGNET' ? ' checked' : '') + '><span><b>' + MAGNET_TH + ' ลด ' + baht(mg.disc) + '</b><small>ลูกค้าใหม่ ใช้ได้ครั้งเดียว' + (mg.capped ? ' (ลดได้สูงสุด ' + baht(mg.cap) + ')' : '') + '</small></span></label></div>';
     } else if (k.promoKind === 'SMART') h += '<div class="row disc"><span>' + SMART_TH + ' ลด ' + c.SMART_DISCOUNT + '% (' + sm.used + ' ชิ้น)</span><span class="num">−' + baht(sm.disc) + '</span></div>';
@@ -1186,7 +1191,12 @@
   function pageCatalog() {
     var m = S.me.member, c = S.cart, cfg = S.cat.cfg, f = S.params.cat || 'all', search = String(S.ui.search || '').trim().toLowerCase(), cats = catList(), results = 0, promoChip = smartOn() || !!magnetMine();
     if (f === 'promo' && !promoChip) f = 'all';
-    function matches(name, id) { return !search || (String(name) + ' ' + String(id || '')).toLowerCase().indexOf(search) >= 0; }
+    var sq = search.replace(/\s+/g, '');
+    function matches(name, id) { // 3.1.5 ค้นคำเรียกที่ร้านตั้ง (alias) ด้วย เช่น "หมูสับ" เจอหมูบด · ไม่สนช่องว่าง
+      if (!search) return true;
+      var p = id ? prod(id) : null, t = (String(name) + ' ' + String(id || '') + ' ' + (p && p.alias ? p.alias.join(' ') : '')).toLowerCase();
+      return t.indexOf(search) >= 0 || (!!sq && t.replace(/\s+/g, '').indexOf(sq) >= 0);
+    }
     var h = top('สั่งของ', 'เลือกวัตถุดิบ แล้วตรวจตะกร้าก่อนส่ง', true) + '<div class="wrap catalog-wrap">';
     h += '<div class="catalog-tools"><label class="search-box" for="catalog-search">' + icon('search') + '<input type="search" id="catalog-search" placeholder="ค้นหาสินค้า" aria-label="ค้นหาสินค้า" value="' + esc(S.ui.search || '') + '" autocomplete="off"></label><div class="chips" aria-label="หมวดสินค้า">' + [['all', 'ทั้งหมด']].concat(promoChip ? [['promo', 'โปรวันนี้']] : [], [['set', 'เซ็ตคุ้ม']], cats.map(function (k) { return [k, catLabel(k)]; })).map(function (x) {
       return '<button class="chip' + (f === x[0] ? ' on' : '') + (x[0] === 'promo' ? ' promo' : '') + '" data-a="cat" data-p="' + esc(x[0]) + '" aria-pressed="' + (f === x[0]) + '">' + x[1] + '</button>';
@@ -1259,7 +1269,7 @@
     if (k.mode === 'deliver') {
       h += shipCard(k);
       if (ar.ok) {
-        if (etaMode()) h += etaCard('deliver') + etaRules();
+        if (etaMode()) h += etaCard('deliver', k.pool) + etaRules();
         else if (autoSlot()) { var w = waveNow(); h += '<div class="eta-card"><span class="eta-ic">' + icon('clock') + '</span><div><b>' + esc(w.slot) + ' ' + (w.date === todayStr() ? 'วันนี้' : 'พรุ่งนี้') + ' รถออกประมาณ ' + esc(w.depart) + '</b><small>แจ้งเวลาถึงในแชตตอนรถออก</small></div></div>' + waveRules(); }
         else h += '<div class="field"><label for="slot">เลือกรอบจัดส่ง</label><select id="slot" data-chg="slot">' + slots.map(function (x) { return '<option' + (c.slot === x ? ' selected' : '') + '>' + esc(x) + '</option>'; }).join('') + '</select></div>';
       }
@@ -1348,7 +1358,7 @@
     if (pr.mode === 'shop' && pr.qk === 'pickup') line = '<b>' + esc(etaText({ kind: 'pickup', date: pr.qd, at: pr.qa, until: pr.qu }).big) + '</b><br>ร้านจะแจ้งในแชตเมื่อจัดของเสร็จ';
     else if (pr.mode === 'shop') line = 'รับเองที่ร้าน ร้านจะแจ้งในแชตเมื่อจัดของเสร็จ';
     else if (pr.mode === 'pickup') line = 'รับที่จุดรับ รอบ ' + esc(S.cat.cfg.CONDO_TIME);
-    else if (pr.qk) { var x = etaText({ kind: pr.qk, date: pr.qd, at: pr.qa, within: pr.qw !== '0' }); line = '<b>' + esc(x.big) + '</b><br>' + esc(x.sub) + (pr.qk === 'express' ? '<br>ร้านจัดรอบให้อัตโนมัติ' : ''); }
+    else if (pr.qk) { var x = etaText({ kind: pr.qk, date: pr.qd, at: pr.qa, within: pr.qw !== '0' }, null, pr.pool === '1'); line = '<b>' + esc(x.big) + '</b><br>' + esc(x.sub) + (pr.qk === 'express' && pr.pool !== '1' ? '<br>ร้านจัดรอบให้อัตโนมัติ' : ''); }
     else if (pr.pool === '1') line = 'ส่งรวมรอบ: ร้านจะส่งเมื่อมีรอบผ่านย่านของคุณ (วันนี้หรือพรุ่งนี้) และแจ้งเวลาในแชต';
     else if (pr.slot) line = (tmr ? 'จัดส่งวัน' + dayName(pr.dd) + 'ที่ ' + thDate(pr.dd) + ' ' : 'จัดส่งวันนี้ ') + esc(custSlot(pr.slot)) + (pr.depart ? ' (รถออกประมาณ ' + esc(pr.depart) + ')' : '');
     else if (tmr) line = 'จัดส่งวัน' + dayName(pr.dd) + 'ที่ ' + thDate(pr.dd);
@@ -1405,8 +1415,9 @@
     if (o.delivery === 'done') return 'ส่งถึงแล้ว';
     if (o.delivery === 'out') return '<b>กำลังนำส่ง' + (o.eta ? ' ถึงประมาณ ' + esc(o.eta) + ' น.' : '') + '</b>';
     var p = String(o.promiseAt || ''), d = p.slice(0, 10), t = p.slice(11, 16), day = d && d !== todayStr() ? ' ' + thDate(d) : '';
-    if (t && o.slot === 'เที่ยวแรก') return 'ส่งเที่ยวแรก' + (day || ' วันนี้') + ' ถึงก่อน ' + esc(t) + ' น.';
-    if (t) return 'ส่งถึงประมาณ ' + esc(t) + ' น.' + day;
+    var pool = o.pool && !o.delivery; // 3.1.5 ส่งรวมรอบ: เวลาที่เร็วที่สุด
+    if (t && o.slot === 'เที่ยวแรก') return (pool ? 'ส่งรวมรอบ เร็วสุดเที่ยวแรก' : 'ส่งเที่ยวแรก') + (day || ' วันนี้') + ' ถึงก่อน ' + esc(t) + ' น.';
+    if (t) return (pool ? 'ส่งรวมรอบ เร็วสุดประมาณ ' : 'ส่งถึงประมาณ ') + esc(t) + ' น.' + day;
     return 'รอบส่ง: ' + esc(custSlot(o.slot)) + (o.deliverDate && o.deliverDate !== o.date ? ' ' + thDate(o.deliverDate) : '') + (o.pool && !o.delivery ? '<br><b>ส่งรวมรอบ</b> (รอรอบผ่านย่านของคุณ)' : '');
   }
   /* v3.1.1 บิลที่ยังไม่จ่าย: ยอดที่ต้องโอน + QR + แนบสลิป อยู่บนสุด */
@@ -1896,7 +1907,11 @@
     },
     memberLinkRemove: function (el) {
       if (!el.dataset.sure) { el.dataset.sure = '1'; el.textContent = 'ยืนยันถอด'; return; }
-      run('กำลังถอด...', api('memberLinkRemove', { code: el.dataset.code }), function () { toast('ถอดแล้ว'); return refreshMe().then(pageCard); });
+      var code = el.dataset.code; // 3.1.5 เอาออกจากรายการบนจอทันที แล้วค่อยโหลดข้อมูลล่าสุด (ข้อมูลเก่าที่ยังค้างจะไม่เอากลับมาแสดง)
+      run('กำลังถอด...', api('memberLinkRemove', { code: code }), function () {
+        S.ui.linkGone = S.ui.linkGone || {}; S.ui.linkGone[code] = 1; dropGoneLinks(); toast('ถอดแล้ว'); if (S.page === 'card') pageCard();
+        refreshMe().then(function () { dropGoneLinks(); if (S.page === 'card') pageCard(); }).catch(function () { });
+      });
     },
     privacyRequest: function (el) {
       if (!el.dataset.sure) { el.dataset.sure = '1'; el.textContent = 'กดอีกครั้งเพื่อยืนยันขอลบข้อมูล'; return; }
@@ -1922,7 +1937,8 @@
   };
   /* เบอร์โทรแบบเดียวกับหลังบ้าน (phone_): เหลือแต่ตัวเลข, +66 → 0 */
   function phoneNorm(v) { var x = String(v === null || v === undefined ? '' : v).replace(/\D/g, ''); if (/^66\d{9}$/.test(x)) x = '0' + x.slice(2); if (/^\d{9}$/.test(x) && x.charAt(0) !== '0') x = '0' + x; return x; }
-  function refreshMe() { return api('me').then(function (r) { S.me = r; loadCart(); saveBoot(); }); }
+  function refreshMe() { return api('me').then(function (r) { S.me = r; dropGoneLinks(); loadCart(); saveBoot(); }); }
+  function dropGoneLinks() { var g = S.ui.linkGone, sh = S.me && S.me.shared; if (g && sh && sh.links) sh.links = sh.links.filter(function (l) { return !g[l.code]; }); }
   var FORMS = {
     register: function (f) {
       var fd = new FormData(f), g = S.ui.regPin || {}, sp = S.ui.shopPhoto, pr0 = S.params, ck0 = chKind(pr0.ch), sign0 = (!!pr0.src && !pr0.ref) || ck0 === 'PARTNER';
